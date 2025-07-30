@@ -1,13 +1,13 @@
 import express from 'express';
 import db from '../db_client';
 import { Customer } from '../types';
-import { generateId } from '../utils/helpers';
+import { generateId, toCamelCase } from '../utils/helpers';
 import { auditService } from '../services/audit.service';
 
 export const getCustomers = async (req: express.Request, res: express.Response) => {
     try {
         const result = await db.query('SELECT * FROM customers ORDER BY name');
-        res.status(200).json(result.rows);
+        res.status(200).json(toCamelCase(result.rows));
     } catch (error) {
         console.error('Error fetching customers:', error);
         res.status(500).json({ message: 'Error fetching customers' });
@@ -20,7 +20,7 @@ export const getCustomerById = async (req: express.Request, res: express.Respons
         if (result.rowCount === 0) {
             return res.status(404).json({ message: 'Customer not found' });
         }
-        res.status(200).json(result.rows[0]);
+        res.status(200).json(toCamelCase(result.rows[0]));
     } catch (error) {
         console.error(`Error fetching customer ${req.params.id}:`, error);
         res.status(500).json({ message: 'Error fetching customer' });
@@ -31,7 +31,7 @@ export const createCustomer = async (req: express.Request, res: express.Response
     const { name, email, phone, address, notes, storeCredit } = req.body;
     const id = generateId('cust');
     const createdAt = new Date().toISOString();
-    
+
     try {
         const result = await db.query(
             'INSERT INTO customers (id, name, email, phone, address, notes, created_at, store_credit, account_balance) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *',
@@ -39,7 +39,7 @@ export const createCustomer = async (req: express.Request, res: express.Response
         );
         const newCustomer = result.rows[0];
         auditService.log(req.user!, 'Customer Created', `Customer: "${newCustomer.name}"`);
-        res.status(201).json(newCustomer);
+        res.status(201).json(toCamelCase(newCustomer));
     } catch (error) {
         console.error('Error creating customer:', error);
         res.status(500).json({ message: 'Error creating customer' });
@@ -60,7 +60,7 @@ export const updateCustomer = async (req: express.Request, res: express.Response
         }
         const updatedCustomer = result.rows[0];
         auditService.log(req.user!, 'Customer Updated', `Customer: "${updatedCustomer.name}"`);
-        res.status(200).json(updatedCustomer);
+        res.status(200).json(toCamelCase(updatedCustomer));
     } catch (error) {
         console.error(`Error updating customer ${id}:`, error);
         res.status(500).json({ message: 'Error updating customer' });
@@ -71,10 +71,10 @@ export const deleteCustomer = async (req: express.Request, res: express.Response
     const { id } = req.params;
     try {
         const salesCheck = await db.query('SELECT 1 FROM sales WHERE customer_id = $1 LIMIT 1', [id]);
-        if (salesCheck.rowCount > 0) {
+        if (salesCheck.rowCount && salesCheck.rowCount > 0) {
             return res.status(400).json({ message: 'Cannot delete customer with sales history.' });
         }
-        
+
         const result = await db.query('DELETE FROM customers WHERE id = $1 RETURNING name', [id]);
         if (result.rowCount === 0) {
             return res.status(404).json({ message: 'Customer not found' });

@@ -1,21 +1,21 @@
 import express from 'express';
 import db from '../db_client';
 import { Sale, Payment } from '../types';
-import { generateId } from '../utils/helpers';
+import { generateId, toCamelCase } from '../utils/helpers';
 import { auditService } from '../services/audit.service';
 import { accountingService } from '../services/accounting.service';
 
 export const getSales = async (req: express.Request, res: express.Response) => {
     const { startDate, endDate, customerId, paymentStatus } = req.query as { [key: string]: string };
-    
+
     let query = `
-        SELECT s.*, 
+        SELECT s.*,
                COALESCE(json_agg(DISTINCT jsonb_build_object('productId', si.product_id, 'name', p.name, 'price', si.price_at_sale, 'quantity', si.quantity, 'stock', p.stock, 'costPrice', si.cost_at_sale, 'returnedQuantity', 0)) FILTER (WHERE si.id IS NOT NULL), '[]') as cart,
                COALESCE(json_agg(DISTINCT pay.*) FILTER (WHERE pay.id IS NOT NULL), '[]') as payments
         FROM sales s
-        LEFT JOIN sale_items si ON s.transaction_id = si.sale_id
-        LEFT JOIN products p ON si.product_id = p.id
-        LEFT JOIN payments pay ON s.transaction_id = pay.sale_id
+                 LEFT JOIN sale_items si ON s.transaction_id = si.sale_id
+                 LEFT JOIN products p ON si.product_id = p.id
+                 LEFT JOIN payments pay ON s.transaction_id = pay.sale_id
     `;
     const params = [];
     const whereClauses = [];
@@ -45,7 +45,8 @@ export const getSales = async (req: express.Request, res: express.Response) => {
 
     try {
         const result = await db.query(query, params);
-        res.status(200).json(result.rows);
+
+        res.status(200).json(toCamelCase(result.rows));
     } catch (error) {
         console.error('Error fetching sales:', error);
         res.status(500).json({ message: 'Error fetching sales' });
@@ -94,7 +95,7 @@ export const createSale = async (req: express.Request, res: express.Response) =>
                 finalPayments.push(pResult.rows[0]);
             }
         }
-        
+
         if (saleData.customerId) {
             let balanceUpdateQuery = 'UPDATE customers SET ';
             const updates = [];
@@ -113,13 +114,13 @@ export const createSale = async (req: express.Request, res: express.Response) =>
                 await client.query(balanceUpdateQuery, params);
             }
         }
-        
+
         await auditService.log(req.user!, 'Sale Created', `Transaction ID: ${transactionId}, Total: ${saleData.total.toFixed(2)}`, client);
         await accountingService.recordSale({ ...newSale, cart: saleData.cart }, client);
 
         await client.query('COMMIT');
-        
-        res.status(201).json({ ...newSale, cart: saleData.cart, payments: finalPayments });
+
+        res.status(201).json(toCamelCase({ ...newSale, cart: saleData.cart, payments: finalPayments }));
 
     } catch (error) {
         await client.query('ROLLBACK');
@@ -152,7 +153,7 @@ export const recordPayment = async (req: express.Request, res: express.Response)
             'INSERT INTO payments(id, sale_id, date, amount, method) VALUES ($1, $2, $3, $4, $5)',
             [generateId('pay'), id, paymentData.date, paymentData.amount, paymentData.method]
         );
-        
+
         const updatedSaleResult = await client.query(
             'UPDATE sales SET amount_paid = $1, payment_status = $2 WHERE transaction_id = $3 RETURNING *',
             [newAmountPaid, newPaymentStatus, id]
@@ -164,12 +165,12 @@ export const recordPayment = async (req: express.Request, res: express.Response)
                 [paymentData.amount, sale.customer_id]
             );
         }
-        
+
         await auditService.log(req.user!, 'Payment Recorded', `For Invoice ${id}, Amount: ${paymentData.amount.toFixed(2)}`, client);
         await accountingService.recordCustomerPayment(sale, { ...paymentData, id: '' }, client);
 
         await client.query('COMMIT');
-        res.status(200).json(updatedSaleResult.rows[0]);
+        res.status(200).json(toCamelCase(updatedSaleResult.rows[0]));
 
     } catch (error) {
         await client.query('ROLLBACK');

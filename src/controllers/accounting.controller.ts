@@ -1,15 +1,16 @@
 import express from 'express';
 import db from '../db_client';
 import { Account, JournalEntry, SupplierInvoice, SupplierPayment } from '../types';
-import { generateId } from '../utils/helpers';
+import {generateId, toCamelCase} from '../utils/helpers';
 import { auditService } from '../services/audit.service';
 import { accountingService } from '../services/accounting.service';
+
 
 // --- Chart of Accounts ---
 export const getAccounts = async (req: express.Request, res: express.Response) => {
     try {
         const result = await db.query('SELECT * FROM accounts ORDER BY number');
-        res.status(200).json(result.rows);
+        res.status(200).json(toCamelCase(result.rows));
     } catch (error) {
         res.status(500).json({ message: 'Error fetching accounts' });
     }
@@ -24,7 +25,7 @@ export const createAccount = async (req: express.Request, res: express.Response)
             [id, name, number, type, isDebitNormal, description]
         );
         auditService.log(req.user!, 'Account Created', `Account: ${name} (${number})`);
-        res.status(201).json(result.rows[0]);
+        res.status(201).json(toCamelCase(result.rows[0]));
     } catch (error) {
         res.status(500).json({ message: 'Error creating account' });
     }
@@ -39,7 +40,7 @@ export const updateAccount = async (req: express.Request, res: express.Response)
         );
         if (result.rowCount === 0) return res.status(404).json({ message: 'Account not found' });
         auditService.log(req.user!, 'Account Updated', `Account: ${name} (${number})`);
-        res.status(200).json(result.rows[0]);
+        res.status(200).json(toCamelCase(result.rows[0]));
     } catch (error) {
         res.status(500).json({ message: 'Error updating account' });
     }
@@ -62,11 +63,11 @@ export const getJournalEntries = async (req: express.Request, res: express.Respo
         const result = await db.query(`
             SELECT je.*, COALESCE(json_agg(jel.*) FILTER (WHERE jel.id IS NOT NULL), '[]') as lines
             FROM journal_entries je
-            LEFT JOIN journal_entry_lines jel ON je.id = jel.journal_entry_id
-            GROUP BY je.id
+                     LEFT JOIN journal_entry_lines jel ON je.id = jel.journal_entry_id
+            GROUP BY je.id, je.date
             ORDER BY je.date DESC
         `);
-        res.status(200).json(result.rows);
+        res.status(200).json(toCamelCase(result.rows));
     } catch (error) {
         res.status(500).json({ message: 'Error fetching journal entries' });
     }
@@ -86,13 +87,13 @@ export const createManualJournalEntry = async (req: express.Request, res: expres
             [entryId, entryData.date, entryData.description, 'manual', null]
         );
         for (const line of entryData.lines) {
-             await db.query('INSERT INTO journal_entry_lines (journal_entry_id, account_id, type, amount, account_name) VALUES ($1, $2, $3, $4, $5)',
+            await db.query('INSERT INTO journal_entry_lines (journal_entry_id, account_id, type, amount, account_name) VALUES ($1, $2, $3, $4, $5)',
                 [entryId, line.accountId, line.type, line.amount, line.accountName]
             );
         }
-        
+
         auditService.log(req.user!, 'Manual Journal Entry Created', `Description: ${entryData.description}`);
-        res.status(201).json({ id: entryId, ...entryData });
+        res.status(201).json(toCamelCase({ id: entryId, ...entryData }));
     } catch (error) {
         res.status(500).json({ message: 'Error creating manual entry' });
     }
@@ -101,14 +102,14 @@ export const createManualJournalEntry = async (req: express.Request, res: expres
 // --- Supplier Invoices ---
 export const getSupplierInvoices = async (req: express.Request, res: express.Response) => {
     try {
-         const result = await db.query(`
+        const result = await db.query(`
             SELECT si.*, COALESCE(json_agg(sp.*) FILTER (WHERE sp.id IS NOT NULL), '[]') as payments
             FROM supplier_invoices si
-            LEFT JOIN supplier_payments sp ON si.id = sp.supplier_invoice_id
-            GROUP BY si.id
+                     LEFT JOIN supplier_payments sp ON si.id = sp.supplier_invoice_id
+            GROUP BY si.id, si.invoice_date
             ORDER BY si.invoice_date DESC
         `);
-        res.status(200).json(result.rows);
+        res.status(200).json(toCamelCase(result.rows));
     } catch (error) {
         res.status(500).json({ message: 'Error fetching supplier invoices' });
     }
@@ -122,7 +123,7 @@ export const createSupplierInvoice = async (req: express.Request, res: express.R
             [id, invoiceNumber, supplierId, supplierName, purchaseOrderId, poNumber, invoiceDate, dueDate, amount]
         );
         auditService.log(req.user!, 'Supplier Invoice Created', `Invoice #: ${invoiceNumber} for ${supplierName}`);
-        res.status(201).json(result.rows[0]);
+        res.status(201).json(toCamelCase(result.rows[0]));
     } catch (error) {
         res.status(500).json({ message: 'Error creating supplier invoice' });
     }
@@ -130,14 +131,14 @@ export const createSupplierInvoice = async (req: express.Request, res: express.R
 export const updateSupplierInvoice = async (req: express.Request, res: express.Response) => {
     const { id } = req.params;
     const { invoiceNumber, supplierId, supplierName, purchaseOrderId, poNumber, invoiceDate, dueDate, amount } = req.body;
-     try {
+    try {
         const result = await db.query(
             'UPDATE supplier_invoices SET invoice_number=$1, supplier_id=$2, supplier_name=$3, purchase_order_id=$4, po_number=$5, invoice_date=$6, due_date=$7, amount=$8 WHERE id=$9 RETURNING *',
             [invoiceNumber, supplierId, supplierName, purchaseOrderId, poNumber, invoiceDate, dueDate, amount, id]
         );
         if(result.rowCount === 0) return res.status(404).json({ message: 'Invoice not found' });
         auditService.log(req.user!, 'Supplier Invoice Updated', `Invoice #: ${invoiceNumber}`);
-        res.status(200).json(result.rows[0]);
+        res.status(200).json(toCamelCase(result.rows[0]));
     } catch (error) {
         res.status(500).json({ message: 'Error updating supplier invoice' });
     }
@@ -148,7 +149,7 @@ export const recordSupplierPayment = async (req: express.Request, res: express.R
     try {
         const invoiceRes = await db.query('SELECT amount, amount_paid FROM supplier_invoices WHERE id = $1', [invoiceId]);
         if (invoiceRes.rowCount === 0) return res.status(404).json({ message: 'Invoice not found' });
-        
+
         const invoice = invoiceRes.rows[0];
         const newAmountPaid = invoice.amount_paid + paymentData.amount;
         const newStatus = newAmountPaid >= invoice.amount ? 'paid' : 'partially_paid';
@@ -156,13 +157,13 @@ export const recordSupplierPayment = async (req: express.Request, res: express.R
         await db.query('INSERT INTO supplier_payments (id, supplier_invoice_id, date, amount, method, reference) VALUES ($1, $2, $3, $4, $5, $6)',
             [generateId('spay'), invoiceId, paymentData.date, paymentData.amount, paymentData.method, paymentData.reference]
         );
-        
+
         const updatedInvoice = await db.query('UPDATE supplier_invoices SET amount_paid = $1, status = $2 WHERE id = $3 RETURNING *',
             [newAmountPaid, newStatus, invoiceId]
         );
 
         auditService.log(req.user!, 'Supplier Payment Recorded', `For Invoice ID: ${invoiceId}, Amount: ${paymentData.amount.toFixed(2)}`);
-        res.status(200).json(updatedInvoice.rows[0]);
+        res.status(200).json(toCamelCase(updatedInvoice.rows[0]));
     } catch (error) {
         res.status(500).json({ message: 'Error recording supplier payment' });
     }

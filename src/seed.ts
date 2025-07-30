@@ -111,10 +111,10 @@ async function seedInitialData(client: any) {
 
     // --- Seed Products ---
     const initialProducts: Omit<Product, 'id'>[] = [
-        { name: 'Premium Blend Coffee', description: 'A rich, full-bodied blend of Arabica beans from South America.', sku: 'SP-84321', barcode: '888000011122', categoryId: categoryMap.get('Beverages'), price: 18.99, costPrice: 12.50, stock: 50, imageUrls: ['https://picsum.photos/seed/coffee/200'], supplierId: supplierMap.get('World Coffee Importers'), brand: 'Global Roast', status: 'active' },
-        { name: 'Organic Green Tea', description: 'Delicate and refreshing green tea, sourced from the finest gardens.', sku: 'SP-19874', barcode: '888000011133', categoryId: categoryMap.get('Beverages'), price: 12.49, costPrice: 8.00, stock: 75, imageUrls: ['https://picsum.photos/seed/tea/200'], supplierId: supplierMap.get('Green Leaf Teas'), brand: 'Zen Garden', status: 'active' },
-        { name: 'Artisan Sourdough Bread', description: 'Naturally leavened sourdough with a crispy crust and chewy interior.', sku: 'SP-33215', barcode: '888000011144', categoryId: categoryMap.get('Bakery'), price: 6.99, costPrice: 3.50, stock: 25, imageUrls: ['https://picsum.photos/seed/bread/200'], supplierId: supplierMap.get('Local Mill & Co.'), brand: 'The Bakehouse', status: 'active' },
-        { name: 'Gourmet Chocolate Bar', description: '70% dark chocolate with hints of sea salt.', sku: 'SP-54321', price: 5.99, costPrice: 2.50, stock: 100, imageUrls: ['https://picsum.photos/seed/chocolate/200'], status: 'active' },
+        { name: 'Premium Blend Coffee', description: 'A rich, full-bodied blend of Arabica beans from South America.', sku: 'SP-84321', barcode: '888000011122', categoryId: categoryMap.get('Beverages'), price: 18.99, costPrice: 12.50, stock: 50, imageUrls: ['/images/salepilot.png'], supplierId: supplierMap.get('World Coffee Importers'), brand: 'Global Roast', status: 'active' },
+        { name: 'Organic Green Tea', description: 'Delicate and refreshing green tea, sourced from the finest gardens.', sku: 'SP-19874', barcode: '888000011133', categoryId: categoryMap.get('Beverages'), price: 12.49, costPrice: 8.00, stock: 75, imageUrls: ['/images/salepilot.png'], supplierId: supplierMap.get('Green Leaf Teas'), brand: 'Zen Garden', status: 'active' },
+        { name: 'Artisan Sourdough Bread', description: 'Naturally leavened sourdough with a crispy crust and chewy interior.', sku: 'SP-33215', barcode: '888000011144', categoryId: categoryMap.get('Bakery'), price: 6.99, costPrice: 3.50, stock: 25, imageUrls: ['/images/salepilot.png'], supplierId: supplierMap.get('Local Mill & Co.'), brand: 'The Bakehouse', status: 'active' },
+        { name: 'Gourmet Chocolate Bar', description: '70% dark chocolate with hints of sea salt.', sku: 'SP-54321', price: 5.99, costPrice: 2.50, stock: 100, imageUrls: ['/images/salepilot.png'], status: 'active' },
     ];
     
     for (const p of initialProducts) {

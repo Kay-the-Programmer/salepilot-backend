@@ -28,7 +28,7 @@ const addJournalEntry = async (entry: Omit<JournalEntry, 'id'>, client?: DBClien
            [entryId, line.accountId, line.type, line.amount, line.accountName]
        );
     }
-    
+
     // Update account balances
     for (const line of entry.lines) {
         const accResult = await dbClient.query('SELECT is_debit_normal FROM accounts WHERE id = $1', [line.accountId]);
@@ -45,7 +45,7 @@ const addJournalEntry = async (entry: Omit<JournalEntry, 'id'>, client?: DBClien
 
 const recordSale = async (sale: Sale, client?: DBClient) => {
     const dbClient = client || db;
-    
+
     const productIds = sale.cart.map(i => i.productId);
     if (productIds.length === 0) return;
 
@@ -55,24 +55,18 @@ const recordSale = async (sale: Sale, client?: DBClient) => {
     const allCategoriesResult = await dbClient.query('SELECT * FROM categories');
     const allCategories: Category[] = allCategoriesResult.rows;
 
-    const allAccountsResult = await dbClient.query('SELECT * FROM accounts');
-    const allAccounts: Account[] = allAccountsResult.rows;
-    
-    const findAccountInList = (subType: Account['subType']) => {
-        const account = allAccounts.find(a => a.subType === subType);
-        if (!account) console.warn(`Accounting Warning: System account with subType '${subType}' not found.`);
-        return account;
-    };
-    
+    // Remove the problematic allAccountsResult and findAccountInList
+
     const revenueByAccount = new Map<string, { account: Account, amount: number }>();
     const cogsByAccount = new Map<string, { account: Account, amount: number }>();
 
-    const defaultRevenueAccount = findAccountInList('sales_revenue');
-    const defaultCogsAccount = findAccountInList('cogs');
-    const inventoryAccount = findAccountInList('inventory');
-    const taxAccount = findAccountInList('sales_tax_payable');
-    const cashAccount = findAccountInList('cash');
-    const arAccount = findAccountInList('accounts_receivable');
+    // Use the existing findAccount function instead
+    const defaultRevenueAccount = await findAccount('sales_revenue', dbClient);
+    const defaultCogsAccount = await findAccount('cogs', dbClient);
+    const inventoryAccount = await findAccount('inventory', dbClient);
+    const taxAccount = await findAccount('sales_tax_payable', dbClient);
+    const cashAccount = await findAccount('cash', dbClient);
+    const arAccount = await findAccount('accounts_receivable', dbClient);
 
     if(!inventoryAccount || !taxAccount || !cashAccount || !defaultRevenueAccount || !defaultCogsAccount || !arAccount) {
         console.error("Accounting Error: Core accounts for sales are not configured.");
@@ -82,19 +76,29 @@ const recordSale = async (sale: Sale, client?: DBClient) => {
     const primaryAssetAccount = sale.paymentStatus === 'paid' ? cashAccount : arAccount;
     const productMap = new Map(allProducts.map(p => [p.id, p]));
     const categoryMap = new Map(allCategories.map(c => [c.id, c]));
-    const accountsMap = new Map(allAccounts.map(a => [a.id, a]));
-    
+
+    // For category-specific accounts, query them individually
+    const accountsMap = new Map<string, Account>();
+
     const totalCartValue = sale.cart.reduce((acc, item) => acc + item.price * item.quantity, 0);
     const discountRatio = totalCartValue > 0 ? (sale.subtotal) / totalCartValue : 1;
 
-    sale.cart.forEach(item => {
+    // Process each cart item
+    for (const item of sale.cart) {
         const product = productMap.get(item.productId);
-        if (!product) return;
-        
+        if (!product) continue;
+
         let revenueAccount = defaultRevenueAccount;
         if (product.categoryId) {
             const category = categoryMap.get(product.categoryId);
             if (category?.revenueAccountId) {
+                // Get or cache the account
+                if (!accountsMap.has(category.revenueAccountId)) {
+                    const accountResult = await dbClient.query('SELECT * FROM accounts WHERE id = $1', [category.revenueAccountId]);
+                    if (accountResult.rowCount > 0) {
+                        accountsMap.set(category.revenueAccountId, accountResult.rows[0]);
+                    }
+                }
                 revenueAccount = accountsMap.get(category.revenueAccountId) || defaultRevenueAccount;
             }
         }
@@ -107,6 +111,13 @@ const recordSale = async (sale: Sale, client?: DBClient) => {
         if (product.categoryId) {
             const category = categoryMap.get(product.categoryId);
             if (category?.cogsAccountId) {
+                // Get or cache the account
+                if (!accountsMap.has(category.cogsAccountId)) {
+                    const accountResult = await dbClient.query('SELECT * FROM accounts WHERE id = $1', [category.cogsAccountId]);
+                    if (accountResult.rowCount > 0) {
+                        accountsMap.set(category.cogsAccountId, accountResult.rows[0]);
+                    }
+                }
                 cogsAccount = accountsMap.get(category.cogsAccountId) || defaultCogsAccount;
             }
         }
@@ -114,7 +125,7 @@ const recordSale = async (sale: Sale, client?: DBClient) => {
         const currentCogs = cogsByAccount.get(cogsAccount.id) || { account: cogsAccount, amount: 0 };
         currentCogs.amount += itemCogs;
         cogsByAccount.set(cogsAccount.id, currentCogs);
-    });
+    }
 
     const totalCogs = Array.from(cogsByAccount.values()).reduce((sum, item) => sum + item.amount, 0);
 
@@ -123,7 +134,7 @@ const recordSale = async (sale: Sale, client?: DBClient) => {
         { accountId: taxAccount.id, accountName: taxAccount.name, type: 'credit', amount: sale.tax },
         { accountId: inventoryAccount.id, accountName: inventoryAccount.name, type: 'credit', amount: totalCogs },
     ];
-    
+
     revenueByAccount.forEach(({ account, amount }) => {
         journalLines.push({ accountId: account.id, accountName: account.name, type: 'credit', amount: amount });
     });
@@ -146,7 +157,7 @@ const recordStockAdjustment = async (product: Product, oldQuantity: number, reas
 
     const costOfChange = quantityChange * (product.costPrice || 0);
     if (Math.abs(costOfChange) < 0.01) return;
-    
+
     await recordConsolidatedStockAdjustment(costOfChange, `Inventory adjustment for ${product.name}. Reason: ${reason}.`, client);
 };
 
@@ -192,7 +203,7 @@ const recordPurchaseOrderReception = async (poId: string, poNumber: string, rece
         console.error("Accounting Error: Core accounts for purchases are not configured.");
         return;
     }
-    
+
     const totalCost = receivedItems.reduce((acc, item) => acc + item.costPrice * item.quantity, 0);
 
     if (totalCost > 0) {

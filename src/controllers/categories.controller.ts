@@ -1,14 +1,15 @@
 import express from 'express';
 import db from '../db_client';
 import { Category } from '../types';
-import { generateId } from '../utils/helpers';
+import { generateId, toCamelCase } from '../utils/helpers';
 import { auditService } from '../services/audit.service';
+
 
 export const getCategories = async (req: express.Request, res: express.Response) => {
     try {
         // Assuming 'attributes' is a JSONB column in the categories table
         const result = await db.query('SELECT * FROM categories ORDER BY name');
-        res.status(200).json(result.rows);
+        res.status(200).json(toCamelCase(result.rows));
     } catch (error) {
         console.error('Error fetching categories:', error);
         res.status(500).json({ message: 'Error fetching categories' });
@@ -26,7 +27,7 @@ export const createCategory = async (req: express.Request, res: express.Response
         );
         const newCategory = result.rows[0];
         auditService.log(req.user!, 'Category Created', `Category: "${newCategory.name}"`);
-        res.status(201).json(newCategory);
+        res.status(201).json(toCamelCase(newCategory));
     } catch (error) {
         console.error('Error creating category:', error);
         res.status(500).json({ message: 'Error creating category' });
@@ -46,7 +47,7 @@ export const updateCategory = async (req: express.Request, res: express.Response
         }
         const updatedCategory = result.rows[0];
         auditService.log(req.user!, 'Category Updated', `Category: "${updatedCategory.name}"`);
-        res.status(200).json(updatedCategory);
+        res.status(200).json(toCamelCase(updatedCategory));
     } catch (error) {
         console.error(`Error updating category ${id}:`, error);
         res.status(500).json({ message: 'Error updating category' });

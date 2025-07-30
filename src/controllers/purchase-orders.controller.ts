@@ -1,7 +1,7 @@
 import express from 'express';
 import db from '../db_client';
 import { PurchaseOrder, ReceptionEvent, SupplierInvoice } from '../types';
-import { generateId } from '../utils/helpers';
+import { generateId, toCamelCase } from '../utils/helpers';
 import { auditService } from '../services/audit.service';
 import { accountingService } from '../services/accounting.service';
 
@@ -11,12 +11,12 @@ export const getPurchaseOrders = async (req: express.Request, res: express.Respo
             SELECT po.*,
                    COALESCE(json_agg(DISTINCT poi.*) FILTER (WHERE poi.id IS NOT NULL), '[]') as items
             FROM purchase_orders po
-            LEFT JOIN purchase_order_items poi ON po.id = poi.po_id
-            GROUP BY po.id
+                     LEFT JOIN purchase_order_items poi ON po.id = poi.po_id
+            GROUP BY po.id, po.created_at
             ORDER BY po.created_at DESC
         `);
         // Note: This simplified query doesn't fetch reception history. A more complex query would be needed.
-        res.status(200).json(result.rows);
+        res.status(200).json(toCamelCase(result.rows));
     } catch (error) {
         console.error('Error fetching purchase orders:', error);
         res.status(500).json({ message: 'Error fetching purchase orders' });
@@ -43,9 +43,9 @@ export const createPurchaseOrder = async (req: express.Request, res: express.Res
                 [id, item.productId, item.productName, item.sku, item.quantity, item.costPrice, 0]
             );
         }
-        
+
         auditService.log(req.user!, 'Purchase Order Created', `PO Number: ${poNumber}`);
-        res.status(201).json({ ...newPO, items });
+        res.status(201).json(toCamelCase({ ...newPO, items }));
     } catch (error) {
         console.error('Error creating PO:', error);
         res.status(500).json({ message: 'Error creating purchase order' });
@@ -53,7 +53,7 @@ export const createPurchaseOrder = async (req: express.Request, res: express.Res
 };
 
 export const updatePurchaseOrder = async (req: express.Request, res: express.Response) => {
-     // Should be a transaction
+    // Should be a transaction
     const { id } = req.params;
     const { items, ...poData } = req.body;
 
@@ -72,7 +72,7 @@ export const updatePurchaseOrder = async (req: express.Request, res: express.Res
 
         await db.query('DELETE FROM purchase_order_items WHERE po_id = $1', [id]);
         for (const item of items) {
-             await db.query(
+            await db.query(
                 'INSERT INTO purchase_order_items (po_id, product_id, product_name, sku, quantity, cost_price, received_quantity) VALUES ($1, $2, $3, $4, $5, $6, $7)',
                 [id, item.productId, item.productName, item.sku, item.quantity, item.costPrice, item.receivedQuantity || 0]
             );
@@ -83,7 +83,7 @@ export const updatePurchaseOrder = async (req: express.Request, res: express.Res
         } else {
             auditService.log(req.user!, 'Purchase Order Updated', `PO Number: ${updatedPO.po_number}`);
         }
-        res.status(200).json({ ...updatedPO, items });
+        res.status(200).json(toCamelCase({ ...updatedPO, items }));
     } catch (error) {
         console.error(`Error updating PO ${id}:`, error);
         res.status(500).json({ message: 'Error updating purchase order' });
@@ -116,7 +116,7 @@ export const receiveItems = async (req: express.Request, res: express.Response) 
     // Should be a transaction
     const { id } = req.params;
     const receivedItems: { productId: string, quantity: number }[] = req.body;
-    
+
     try {
         for (const item of receivedItems) {
             // Update received quantity on PO
@@ -124,7 +124,7 @@ export const receiveItems = async (req: express.Request, res: express.Response) 
             // Update product stock
             await db.query('UPDATE products SET stock = stock + $1 WHERE id = $2', [item.quantity, item.productId]);
         }
-        
+
         // Update PO status
         const itemsResult = await db.query('SELECT quantity, received_quantity FROM purchase_order_items WHERE po_id = $1', [id]);
         const allReceived = itemsResult.rows.every(item => item.received_quantity >= item.quantity);
@@ -132,9 +132,9 @@ export const receiveItems = async (req: express.Request, res: express.Response) 
         const receivedAt = new Date().toISOString();
 
         const updatedPOResult = await db.query('UPDATE purchase_orders SET status = $1, received_at = $2 WHERE id = $3 RETURNING *', [newStatus, receivedAt, id]);
-        
+
         auditService.log(req.user!, 'PO Stock Received', `PO ID: ${id} | ${receivedItems.length} item types.`);
-        res.status(200).json(updatedPOResult.rows[0]);
+        res.status(200).json(toCamelCase(updatedPOResult.rows[0]));
     } catch (error) {
         console.error(`Error receiving items for PO ${id}:`, error);
         res.status(500).json({ message: 'Error receiving items' });

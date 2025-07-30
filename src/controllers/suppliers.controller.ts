@@ -1,12 +1,12 @@
 import express from 'express';
 import db from '../db_client';
 import { auditService } from '../services/audit.service';
-import { generateId } from '../utils/helpers';
+import { generateId, toCamelCase } from '../utils/helpers';
 
 export const getSuppliers = async (req: express.Request, res: express.Response) => {
     try {
         const result = await db.query('SELECT * FROM suppliers ORDER BY name');
-        res.status(200).json(result.rows);
+        res.status(200).json(toCamelCase(result.rows));
     } catch (error) {
         console.error('Error fetching suppliers:', error);
         res.status(500).json({ message: 'Error fetching suppliers' });
@@ -19,7 +19,7 @@ export const getSupplierById = async (req: express.Request, res: express.Respons
         if (result.rowCount === 0) {
             return res.status(404).json({ message: 'Supplier not found' });
         }
-        res.status(200).json(result.rows[0]);
+        res.status(200).json(toCamelCase(result.rows[0]));
     } catch (error) {
         console.error(`Error fetching supplier ${req.params.id}:`, error);
         res.status(500).json({ message: 'Error fetching supplier' });
@@ -36,7 +36,7 @@ export const createSupplier = async (req: express.Request, res: express.Response
         );
         const newSupplier = result.rows[0];
         auditService.log(req.user!, 'Supplier Created', `Supplier: "${newSupplier.name}"`);
-        res.status(201).json(newSupplier);
+        res.status(201).json(toCamelCase(newSupplier));
     } catch (error) {
         console.error('Error creating supplier:', error);
         res.status(500).json({ message: 'Error creating supplier' });
@@ -56,7 +56,7 @@ export const updateSupplier = async (req: express.Request, res: express.Response
         }
         const updatedSupplier = result.rows[0];
         auditService.log(req.user!, 'Supplier Updated', `Supplier: "${updatedSupplier.name}"`);
-        res.status(200).json(updatedSupplier);
+        res.status(200).json(toCamelCase(updatedSupplier));
     } catch (error) {
         console.error(`Error updating supplier ${id}:`, error);
         res.status(500).json({ message: 'Error updating supplier' });
@@ -68,7 +68,7 @@ export const deleteSupplier = async (req: express.Request, res: express.Response
     // NOTE: This should be a transaction
     try {
         await db.query('UPDATE products SET supplier_id = NULL WHERE supplier_id = $1', [id]);
-        
+
         const result = await db.query('DELETE FROM suppliers WHERE id = $1 RETURNING name', [id]);
         if (result.rowCount === 0) {
             return res.status(404).json({ message: 'Supplier not found' });

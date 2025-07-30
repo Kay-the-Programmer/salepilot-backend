@@ -186,37 +186,6 @@ CREATE INDEX idx_journal_entry_lines_account_id ON journal_entry_lines(account_i
 
 
 --
--- ACCOUNTS PAYABLE (Supplier Billing)
---
-
-CREATE TABLE supplier_invoices (
-    id TEXT PRIMARY KEY,
-    invoice_number TEXT NOT NULL,
-    supplier_id TEXT NOT NULL REFERENCES suppliers(id),
-    supplier_name TEXT NOT NULL,
-    purchase_order_id TEXT REFERENCES purchase_orders(id),
-    po_number TEXT,
-    invoice_date DATE NOT NULL,
-    due_date DATE NOT NULL,
-    amount DECIMAL(10, 2) NOT NULL,
-    amount_paid DECIMAL(10, 2) NOT NULL DEFAULT 0,
-    status TEXT NOT NULL CHECK (status IN ('unpaid', 'partially_paid', 'paid', 'overdue'))
-);
-
-CREATE TABLE supplier_payments (
-    id TEXT PRIMARY KEY,
-    supplier_invoice_id TEXT NOT NULL REFERENCES supplier_invoices(id) ON DELETE CASCADE,
-    "date" TIMESTAMPTZ NOT NULL,
-    amount DECIMAL(10, 2) NOT NULL,
-    method TEXT NOT NULL,
-    reference TEXT
-);
-
-CREATE INDEX idx_supplier_invoices_supplier_id ON supplier_invoices(supplier_id);
-CREATE INDEX idx_supplier_invoices_po_id ON supplier_invoices(purchase_order_id);
-CREATE INDEX idx_supplier_payments_invoice_id ON supplier_payments(supplier_invoice_id);
-
---
 -- RETURNS MANAGEMENT
 --
 
@@ -294,6 +263,38 @@ CREATE INDEX idx_po_receptions_po_id ON po_receptions(po_id);
 
 
 --
+-- ACCOUNTS PAYABLE (Supplier Billing)
+--
+
+CREATE TABLE supplier_invoices (
+    id TEXT PRIMARY KEY,
+    invoice_number TEXT NOT NULL,
+    supplier_id TEXT NOT NULL REFERENCES suppliers(id),
+    supplier_name TEXT NOT NULL,
+    purchase_order_id TEXT REFERENCES purchase_orders(id),
+    po_number TEXT,
+    invoice_date DATE NOT NULL,
+    due_date DATE NOT NULL,
+    amount DECIMAL(10, 2) NOT NULL,
+    amount_paid DECIMAL(10, 2) NOT NULL DEFAULT 0,
+    status TEXT NOT NULL CHECK (status IN ('unpaid', 'partially_paid', 'paid', 'overdue'))
+);
+
+CREATE TABLE supplier_payments (
+    id TEXT PRIMARY KEY,
+    supplier_invoice_id TEXT NOT NULL REFERENCES supplier_invoices(id) ON DELETE CASCADE,
+    "date" TIMESTAMPTZ NOT NULL,
+    amount DECIMAL(10, 2) NOT NULL,
+    method TEXT NOT NULL,
+    reference TEXT
+);
+
+CREATE INDEX idx_supplier_invoices_supplier_id ON supplier_invoices(supplier_id);
+CREATE INDEX idx_supplier_invoices_po_id ON supplier_invoices(purchase_order_id);
+CREATE INDEX idx_supplier_payments_invoice_id ON supplier_payments(supplier_invoice_id);
+
+
+--
 -- STOCK TAKES
 --
 
@@ -315,3 +316,8 @@ CREATE TABLE stock_take_items (
 );
 
 CREATE INDEX idx_stock_take_items_stock_take_id ON stock_take_items(stock_take_id);
+
+-- Run these commands in your SQL client
+ALTER TABLE categories ADD COLUMN attributes JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE categories ADD COLUMN revenue_account_id TEXT REFERENCES accounts(id) ON DELETE SET NULL;
+ALTER TABLE categories ADD COLUMN cogs_account_id TEXT REFERENCES accounts(id) ON DELETE SET NULL;

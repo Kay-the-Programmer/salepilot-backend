@@ -1,5 +1,6 @@
 import express from 'express';
 import db from '../db_client';
+import { toCamelCase } from '../utils/helpers';
 
 export const getDashboardData = async (req: express.Request, res: express.Response) => {
     const { startDate, endDate } = req.query as { startDate: string, endDate: string };
@@ -16,7 +17,7 @@ export const getDashboardData = async (req: express.Request, res: express.Respon
                 COALESCE(SUM(si.total_cost), 0) AS "totalCogs",
                 COUNT(DISTINCT s.transaction_id) AS "totalTransactions"
             FROM sales s
-            JOIN (
+                     JOIN (
                 SELECT sale_id, SUM(cost_at_sale * quantity) as total_cost
                 FROM sale_items
                 GROUP BY sale_id
@@ -33,7 +34,7 @@ export const getDashboardData = async (req: express.Request, res: express.Respon
                 SUM(s.total) as revenue,
                 SUM(s.total - si.total_cost) as profit
             FROM sales s
-            JOIN (
+                     JOIN (
                 SELECT sale_id, SUM(cost_at_sale * quantity) as total_cost
                 FROM sale_items
                 GROUP BY sale_id
@@ -48,11 +49,80 @@ export const getDashboardData = async (req: express.Request, res: express.Respon
             acc[dateStr] = { revenue: parseFloat(row.revenue), profit: parseFloat(row.profit) };
             return acc;
         }, {});
-        
+
+        // --- Top Products by Revenue ---
+        const topProductsRevenueQuery = `
+            SELECT p.name, SUM(si.quantity) as quantity, SUM(si.price_at_sale * si.quantity) as revenue
+            FROM sale_items si
+                     JOIN products p ON si.product_id = p.id
+                     JOIN sales s ON si.sale_id = s.transaction_id
+            WHERE s.timestamp BETWEEN $1 AND $2 AND s.payment_status = 'paid'
+            GROUP BY p.name
+            ORDER BY revenue DESC
+            LIMIT 10;
+        `;
+        const topProductsRevenueResult = await db.query(topProductsRevenueQuery, [startDate, endDate]);
+
+        // --- Top Products by Quantity ---
+        const topProductsQuantityQuery = `
+            SELECT p.name, SUM(si.quantity) as quantity
+            FROM sale_items si
+                     JOIN products p ON si.product_id = p.id
+                     JOIN sales s ON si.sale_id = s.transaction_id
+            WHERE s.timestamp BETWEEN $1 AND $2 AND s.payment_status = 'paid'
+            GROUP BY p.name
+            ORDER BY quantity DESC
+            LIMIT 10;
+        `;
+        const topProductsQuantityResult = await db.query(topProductsQuantityQuery, [startDate, endDate]);
+
+        // --- Sales by Category ---
+        const salesByCategoryQuery = `
+            SELECT c.name, SUM(si.price_at_sale * si.quantity) as revenue
+            FROM sale_items si
+                     JOIN products p ON si.product_id = p.id
+                     JOIN categories c ON p.category_id = c.id
+                     JOIN sales s ON si.sale_id = s.transaction_id
+            WHERE s.timestamp BETWEEN $1 AND $2 AND s.payment_status = 'paid'
+            GROUP BY c.name
+            ORDER BY revenue DESC;
+        `;
+        const salesByCategoryResult = await db.query(salesByCategoryQuery, [startDate, endDate]);
+
+        // --- Cashflow from Journal Entries ---
+        const cashflowQuery = `
+            SELECT
+                DATE(je.date) as date,
+                SUM(CASE WHEN jel.type = 'debit' AND a.type = 'asset' THEN jel.amount ELSE 0 END) as inflow,
+                SUM(CASE WHEN jel.type = 'credit' AND a.type = 'asset' THEN jel.amount ELSE 0 END) as outflow
+            FROM journal_entries je
+                     JOIN journal_entry_lines jel ON je.id = jel.journal_entry_id
+                     JOIN accounts a ON jel.account_id = a.id
+            WHERE je.date BETWEEN $1 AND $2 AND a.sub_type IN ('cash', 'accounts_receivable')
+            GROUP BY DATE(je.date)
+            ORDER BY date ASC;
+        `;
+        const cashflowResult = await db.query(cashflowQuery, [startDate, endDate]);
+
+        const cashflowTrend = cashflowResult.rows.reduce((acc, row) => {
+            const dateStr = new Date(row.date).toISOString().split('T')[0];
+            acc[dateStr] = {
+                inflow: parseFloat(row.inflow),
+                outflow: parseFloat(row.outflow)
+            };
+            return acc;
+        }, {});
+
+        const totalCashflow = cashflowResult.rows.reduce((acc, row) => {
+            acc.totalInflow += parseFloat(row.inflow);
+            acc.totalOutflow += parseFloat(row.outflow);
+            return acc;
+        }, { totalInflow: 0, totalOutflow: 0 });
+
         // --- Other Aggregations ---
         // (These would also be converted to SQL for production-grade performance)
         // For now, keeping some logic in JS to simplify the transition.
-        
+
         // --- Inventory Calculations ---
         const invQuery = `
             SELECT
@@ -67,11 +137,30 @@ export const getDashboardData = async (req: express.Request, res: express.Respon
         // --- Customer Calculations ---
         const customerQuery = `
             SELECT
-                (SELECT COUNT(*) FROM customers) as "totalCustomers",
-                COALESCE(SUM(store_credit), 0) as "totalStoreCreditOwed"
+                    (SELECT COUNT(*) FROM customers) as "totalCustomers",
+                    COALESCE(SUM(account_balance), 0) as "totalStoreCreditOwed"
+            FROM customers
         `;
         const customerResult = await db.query(customerQuery);
         const customerData = customerResult.rows[0];
+
+        // --- Active Customers in Period ---
+        const activeCustomersQuery = `
+            SELECT COUNT(DISTINCT customer_id) as "activeCustomers"
+            FROM sales
+            WHERE timestamp BETWEEN $1 AND $2 AND customer_id IS NOT NULL
+        `;
+        const activeCustomersResult = await db.query(activeCustomersQuery, [startDate, endDate]);
+        const activeCustomers = parseInt(activeCustomersResult.rows[0].activeCustomers, 10);
+
+        // --- New Customers in Period ---
+        const newCustomersQuery = `
+            SELECT COUNT(*) as "newCustomers"
+            FROM customers
+            WHERE created_at BETWEEN $1 AND $2
+        `;
+        const newCustomersResult = await db.query(newCustomersQuery, [startDate, endDate]);
+        const newCustomers = parseInt(newCustomersResult.rows[0].newCustomers, 10);
 
         // --- Final Report Object ---
         const report = {
@@ -83,10 +172,19 @@ export const getDashboardData = async (req: express.Request, res: express.Respon
                 avgSaleValue: salesData.totalTransactions > 0 ? salesData.totalRevenue / salesData.totalTransactions : 0,
                 grossMargin: salesData.totalRevenue > 0 ? (salesData.totalProfit / salesData.totalRevenue) * 100 : 0,
                 salesTrend: salesTrend,
-                // Top products/categories would require more complex queries
-                topProductsByRevenue: [],
-                topProductsByQuantity: [],
-                salesByCategory: [],
+                topProductsByRevenue: topProductsRevenueResult.rows.map(row => ({
+                    name: row.name,
+                    quantity: parseInt(row.quantity, 10),
+                    revenue: parseFloat(row.revenue)
+                })),
+                topProductsByQuantity: topProductsQuantityResult.rows.map(row => ({
+                    name: row.name,
+                    quantity: parseInt(row.quantity, 10)
+                })),
+                salesByCategory: salesByCategoryResult.rows.map(row => ({
+                    name: row.name,
+                    revenue: parseFloat(row.revenue)
+                })),
             },
             inventory: {
                 totalRetailValue: parseFloat(invData.totalRetailValue),
@@ -97,18 +195,18 @@ export const getDashboardData = async (req: express.Request, res: express.Respon
             customers: {
                 totalCustomers: parseInt(customerData.totalCustomers, 10),
                 totalStoreCreditOwed: parseFloat(customerData.totalStoreCreditOwed),
-                activeCustomersInPeriod: 0, // Requires more complex query
-                newCustomersInPeriod: 0, // Requires more complex query
+                activeCustomersInPeriod: activeCustomers,
+                newCustomersInPeriod: newCustomers,
             },
-            cashflow: { // Requires querying payments tables
-                totalInflow: 0,
-                totalOutflow: 0,
-                netCashflow: 0,
-                cashflowTrend: {},
+            cashflow: {
+                totalInflow: totalCashflow.totalInflow,
+                totalOutflow: totalCashflow.totalOutflow,
+                netCashflow: totalCashflow.totalInflow - totalCashflow.totalOutflow,
+                cashflowTrend: cashflowTrend,
             }
         };
-        
-        res.status(200).json(report);
+
+        res.status(200).json(toCamelCase(report));
     } catch (error) {
         console.error("Error generating dashboard data:", error);
         res.status(500).json({ message: "Error generating report data" });

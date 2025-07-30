@@ -2,7 +2,7 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import db from '../db_client';
 import { User } from '../types';
-import { generateId } from '../utils/helpers';
+import { generateId, toCamelCase } from '../utils/helpers';
 import express from 'express';
 
 const generateToken = (id: string) => {
@@ -18,13 +18,14 @@ export const loginUser = async (req: express.Request, res: express.Response) => 
         const user = result.rows[0];
 
         if (user && (await bcrypt.compare(password, user.password_hash))) {
-            res.json({
+            const userResponse = toCamelCase({
                 id: user.id,
                 name: user.name,
                 email: user.email,
                 role: user.role,
                 token: generateToken(user.id),
             });
+            res.json(userResponse);
         } else {
             res.status(401).json({ message: 'Invalid credentials' });
         }
@@ -39,7 +40,7 @@ export const registerUser = async (req: express.Request, res: express.Response) 
     if (!name || !email || !password) {
         return res.status(400).json({ message: 'Please add all fields' });
     }
-    
+
     try {
         const userExistsResult = await db.query('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
         if (userExistsResult.rowCount > 0) {
@@ -57,10 +58,12 @@ export const registerUser = async (req: express.Request, res: express.Response) 
         );
         const newUser = insertResult.rows[0];
 
-        res.status(201).json({
+        const userResponse = toCamelCase({
             ...newUser,
             token: generateToken(newUser.id),
         });
+
+        res.status(201).json(userResponse);
     } catch (error) {
         console.error('Registration error:', error);
         res.status(500).json({ message: 'Server error during registration' });
@@ -68,7 +71,7 @@ export const registerUser = async (req: express.Request, res: express.Response) 
 };
 
 export const getCurrentUser = (req: express.Request, res: express.Response) => {
-    res.status(200).json(req.user);
+    res.status(200).json(toCamelCase(req.user));
 };
 
 export const forgotPassword = async (req: express.Request, res: express.Response) => {
