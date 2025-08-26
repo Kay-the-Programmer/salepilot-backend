@@ -7,18 +7,17 @@ import { accountingService } from '../services/accounting.service';
 
 export const getSales = async (req: express.Request, res: express.Response) => {
     const { startDate, endDate, customerId, paymentStatus } = req.query as { [key: string]: string };
+    const pageNum = req.query.page ? parseInt(req.query.page as string, 10) : undefined;
+    const limitNum = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
 
-    let query = `
-        SELECT s.*,
-               COALESCE(json_agg(DISTINCT jsonb_build_object('productId', si.product_id, 'name', p.name, 'price', si.price_at_sale, 'quantity', si.quantity, 'stock', p.stock, 'costPrice', si.cost_at_sale, 'returnedQuantity', 0)) FILTER (WHERE si.id IS NOT NULL), '[]') as cart,
-               COALESCE(json_agg(DISTINCT pay.*) FILTER (WHERE pay.id IS NOT NULL), '[]') as payments
+    let baseQuery = `
         FROM sales s
                  LEFT JOIN sale_items si ON s.transaction_id = si.sale_id
                  LEFT JOIN products p ON si.product_id = p.id
                  LEFT JOIN payments pay ON s.transaction_id = pay.sale_id
     `;
-    const params = [];
-    const whereClauses = [];
+    const params: any[] = [];
+    const whereClauses: string[] = [];
 
     if (startDate) {
         params.push(startDate);
@@ -38,15 +37,42 @@ export const getSales = async (req: express.Request, res: express.Response) => {
     }
 
     if (whereClauses.length > 0) {
-        query += ' WHERE ' + whereClauses.join(' AND ');
+        baseQuery += ' WHERE ' + whereClauses.join(' AND ');
     }
 
-    query += ' GROUP BY s.transaction_id ORDER BY s.timestamp DESC';
+    let selectQuery = `
+        SELECT s.*,
+               COALESCE(json_agg(DISTINCT jsonb_build_object('productId', si.product_id, 'name', p.name, 'price', si.price_at_sale, 'quantity', si.quantity, 'stock', p.stock, 'costPrice', si.cost_at_sale, 'returnedQuantity', 0)) FILTER (WHERE si.id IS NOT NULL), '[]') as cart,
+               COALESCE(json_agg(DISTINCT pay.*) FILTER (WHERE pay.id IS NOT NULL), '[]') as payments
+        ${baseQuery}
+        GROUP BY s.transaction_id
+        ORDER BY s.timestamp DESC
+    `;
+
+    // Pagination support: if limit provided (and page), compute total and apply LIMIT/OFFSET
+    const usePagination = !!limitNum && limitNum! > 0;
 
     try {
-        const result = await db.query(query, params);
+        let total = 0;
+        if (usePagination) {
+            const countQuery = `SELECT COUNT(*) as count FROM sales s${whereClauses.length ? ' WHERE ' + whereClauses.join(' AND ') : ''}`;
+            const countResult = await db.query(countQuery, params);
+            total = parseInt(countResult.rows[0].count, 10) || 0;
+            const page = Math.max(1, pageNum || 1);
+            const limit = limitNum!;
+            const offset = (page - 1) * limit;
+            // Append limit/offset at the end
+            selectQuery += ` LIMIT ${limit} OFFSET ${offset}`;
+        }
 
-        res.status(200).json(toCamelCase(result.rows));
+        const result = await db.query(selectQuery, params);
+        const rows = toCamelCase(result.rows);
+
+        if (usePagination) {
+            res.status(200).json({ items: rows, total, page: Math.max(1, pageNum || 1), limit: limitNum });
+        } else {
+            res.status(200).json(rows);
+        }
     } catch (error) {
         console.error('Error fetching sales:', error);
         res.status(500).json({ message: 'Error fetching sales' });
@@ -146,8 +172,25 @@ export const recordPayment = async (req: express.Request, res: express.Response)
         }
         const sale = saleResult.rows[0];
 
+        const totalCents = Math.round(sale.total * 100);
+        const alreadyPaidCents = Math.round(sale.amount_paid * 100);
+        const remainingCents = Math.max(0, totalCents - alreadyPaidCents);
+        const paymentCents = Math.round(paymentData.amount * 100);
+
+        // Block payments when invoice is already fully paid
+        if (remainingCents <= 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ message: 'Invoice is already fully paid. No additional payments are allowed.' });
+        }
+        // Prevent overpayments beyond the remaining balance (allowing for cent rounding)
+        if (paymentCents > remainingCents) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ message: `Payment exceeds remaining balance. Remaining due is ${(remainingCents/100).toFixed(2)}.` });
+        }
+
         const newAmountPaid = sale.amount_paid + paymentData.amount;
-        const newPaymentStatus = newAmountPaid >= sale.total ? 'paid' : 'partially_paid';
+        const paidCents = Math.round(newAmountPaid * 100);
+        const newPaymentStatus = paidCents >= totalCents ? 'paid' : 'partially_paid';
 
         await client.query(
             'INSERT INTO payments(id, sale_id, date, amount, method) VALUES ($1, $2, $3, $4, $5)',

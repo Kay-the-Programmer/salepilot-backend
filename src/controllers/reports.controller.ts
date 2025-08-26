@@ -8,6 +8,9 @@ export const getDashboardData = async (req: express.Request, res: express.Respon
         return res.status(400).json({ message: 'startDate and endDate query parameters are required.' });
     }
 
+    const adjustedEndDate = new Date(new Date(endDate).getTime() + 24 * 60 * 60 * 1000 - 1).toISOString();
+
+
     try {
         // --- Sales Calculations ---
         const salesQuery = `
@@ -24,7 +27,7 @@ export const getDashboardData = async (req: express.Request, res: express.Respon
             ) si ON s.transaction_id = si.sale_id
             WHERE s.timestamp BETWEEN $1 AND $2 AND s.payment_status = 'paid';
         `;
-        const salesResult = await db.query(salesQuery, [startDate, endDate]);
+        const salesResult = await db.query(salesQuery, [startDate, adjustedEndDate]);
         const salesData = salesResult.rows[0];
 
         // --- Sales Trend ---
@@ -43,7 +46,7 @@ export const getDashboardData = async (req: express.Request, res: express.Respon
             GROUP BY DATE(s.timestamp)
             ORDER BY date ASC;
         `;
-        const trendResult = await db.query(trendQuery, [startDate, endDate]);
+        const trendResult = await db.query(trendQuery, [startDate, adjustedEndDate]);
         const salesTrend = trendResult.rows.reduce((acc, row) => {
             const dateStr = new Date(row.date).toISOString().split('T')[0];
             acc[dateStr] = { revenue: parseFloat(row.revenue), profit: parseFloat(row.profit) };
@@ -61,7 +64,7 @@ export const getDashboardData = async (req: express.Request, res: express.Respon
             ORDER BY revenue DESC
             LIMIT 10;
         `;
-        const topProductsRevenueResult = await db.query(topProductsRevenueQuery, [startDate, endDate]);
+        const topProductsRevenueResult = await db.query(topProductsRevenueQuery, [startDate, adjustedEndDate]);
 
         // --- Top Products by Quantity ---
         const topProductsQuantityQuery = `
@@ -74,7 +77,7 @@ export const getDashboardData = async (req: express.Request, res: express.Respon
             ORDER BY quantity DESC
             LIMIT 10;
         `;
-        const topProductsQuantityResult = await db.query(topProductsQuantityQuery, [startDate, endDate]);
+        const topProductsQuantityResult = await db.query(topProductsQuantityQuery, [startDate, adjustedEndDate]);
 
         // --- Sales by Category ---
         const salesByCategoryQuery = `
@@ -87,7 +90,7 @@ export const getDashboardData = async (req: express.Request, res: express.Respon
             GROUP BY c.name
             ORDER BY revenue DESC;
         `;
-        const salesByCategoryResult = await db.query(salesByCategoryQuery, [startDate, endDate]);
+        const salesByCategoryResult = await db.query(salesByCategoryQuery, [startDate, adjustedEndDate]);
 
         // --- Cashflow from Journal Entries ---
         const cashflowQuery = `
@@ -102,7 +105,7 @@ export const getDashboardData = async (req: express.Request, res: express.Respon
             GROUP BY DATE(je.date)
             ORDER BY date ASC;
         `;
-        const cashflowResult = await db.query(cashflowQuery, [startDate, endDate]);
+        const cashflowResult = await db.query(cashflowQuery, [startDate, adjustedEndDate]);
 
         const cashflowTrend = cashflowResult.rows.reduce((acc, row) => {
             const dateStr = new Date(row.date).toISOString().split('T')[0];
@@ -150,7 +153,7 @@ export const getDashboardData = async (req: express.Request, res: express.Respon
             FROM sales
             WHERE timestamp BETWEEN $1 AND $2 AND customer_id IS NOT NULL
         `;
-        const activeCustomersResult = await db.query(activeCustomersQuery, [startDate, endDate]);
+        const activeCustomersResult = await db.query(activeCustomersQuery, [startDate, adjustedEndDate]);
         const activeCustomers = parseInt(activeCustomersResult.rows[0].activeCustomers, 10);
 
         // --- New Customers in Period ---
@@ -159,7 +162,7 @@ export const getDashboardData = async (req: express.Request, res: express.Respon
             FROM customers
             WHERE created_at BETWEEN $1 AND $2
         `;
-        const newCustomersResult = await db.query(newCustomersQuery, [startDate, endDate]);
+        const newCustomersResult = await db.query(newCustomersQuery, [startDate, adjustedEndDate]);
         const newCustomers = parseInt(newCustomersResult.rows[0].newCustomers, 10);
 
         // --- Final Report Object ---
@@ -210,5 +213,98 @@ export const getDashboardData = async (req: express.Request, res: express.Respon
     } catch (error) {
         console.error("Error generating dashboard data:", error);
         res.status(500).json({ message: "Error generating report data" });
+    }
+};
+
+export const getDailySalesWithProducts = async (req: express.Request, res: express.Response) => {
+    const { startDate, endDate } = req.query as { startDate: string, endDate: string };
+    if (!startDate || !endDate) {
+        return res.status(400).json({ message: 'startDate and endDate query parameters are required.' });
+    }
+    const adjustedEndDate = new Date(new Date(endDate).getTime() + 24 * 60 * 60 * 1000 - 1).toISOString();
+
+    try {
+        const dailyItemsQuery = `
+            SELECT
+                DATE(s.timestamp) as date,
+                p.name as product_name,
+                SUM(si.quantity) as quantity,
+                SUM(si.price_at_sale * si.quantity) as revenue
+            FROM sale_items si
+            JOIN products p ON si.product_id = p.id
+            JOIN sales s ON si.sale_id = s.transaction_id
+            WHERE s.timestamp BETWEEN $1 AND $2 AND s.payment_status = 'paid'
+            GROUP BY DATE(s.timestamp), p.name
+            ORDER BY DATE(s.timestamp) ASC, revenue DESC;
+        `;
+        const result = await db.query(dailyItemsQuery, [startDate, adjustedEndDate]);
+
+        const grouped: Record<string, { date: string; totalRevenue: number; totalQuantity: number; items: { name: string; quantity: number; revenue: number }[] }> = {};
+        for (const row of result.rows) {
+            const dateStr = new Date(row.date).toISOString().split('T')[0];
+            if (!grouped[dateStr]) {
+                grouped[dateStr] = { date: dateStr, totalRevenue: 0, totalQuantity: 0, items: [] };
+            }
+            const qty = parseInt(row.quantity, 10);
+            const rev = parseFloat(row.revenue);
+            grouped[dateStr].items.push({ name: row.product_name, quantity: qty, revenue: rev });
+            grouped[dateStr].totalQuantity += qty;
+            grouped[dateStr].totalRevenue += rev;
+        }
+
+        // Return as ordered array by date
+        const daily = Object.values(grouped).sort((a, b) => a.date.localeCompare(b.date));
+        res.status(200).json(toCamelCase({ daily }));
+    } catch (error) {
+        console.error('Error generating daily sales with products:', error);
+        res.status(500).json({ message: 'Error generating daily sales report' });
+    }
+};
+
+
+export const getPersonalUseAdjustments = async (req: express.Request, res: express.Response) => {
+    const { startDate, endDate } = req.query as { startDate: string, endDate: string };
+    if (!startDate || !endDate) {
+        return res.status(400).json({ message: 'startDate and endDate query parameters are required.' });
+    }
+    const adjustedEndDate = new Date(new Date(endDate).getTime() + 24 * 60 * 60 * 1000 - 1).toISOString();
+
+    try {
+        const q = `
+            SELECT id, "timestamp", user_name, action, details
+            FROM audit_logs
+            WHERE action = 'Stock Adjusted'
+              AND details ILIKE '%Reason: Personal Use%'
+              AND "timestamp" BETWEEN $1 AND $2
+            ORDER BY "timestamp" DESC;
+        `;
+        const result = await db.query(q, [startDate, adjustedEndDate]);
+
+        const parseEntry = (row: any) => {
+            const details: string = row.details || '';
+            // Expected format: Product: "<name>" | From: <old> To: <new> | Reason: Personal Use
+            const nameMatch = details.match(/Product:\s*"([^"]+)"/);
+            const fromMatch = details.match(/From:\s*(\d+(?:\.\d+)?)/);
+            const toMatch = details.match(/To:\s*(\d+(?:\.\d+)?)/);
+            const productName = nameMatch ? nameMatch[1] : 'Unknown';
+            const fromQty = fromMatch ? parseFloat(fromMatch[1]) : null;
+            const toQty = toMatch ? parseFloat(toMatch[1]) : null;
+            const change = (fromQty != null && toQty != null) ? (toQty - fromQty) : null;
+            return {
+                id: row.id,
+                timestamp: row.timestamp,
+                userName: row.user_name,
+                productName,
+                fromQty,
+                toQty,
+                change,
+            };
+        };
+
+        const items = result.rows.map(parseEntry);
+        res.status(200).json(toCamelCase({ items }));
+    } catch (error) {
+        console.error('Error generating personal use report:', error);
+        res.status(500).json({ message: 'Error generating personal use report' });
     }
 };

@@ -151,14 +151,33 @@ export const recordSupplierPayment = async (req: express.Request, res: express.R
         if (invoiceRes.rowCount === 0) return res.status(404).json({ message: 'Invoice not found' });
 
         const invoice = invoiceRes.rows[0];
-        const newAmountPaid = invoice.amount_paid + paymentData.amount;
-        const newStatus = newAmountPaid >= invoice.amount ? 'paid' : 'partially_paid';
 
-        await db.query('INSERT INTO supplier_payments (id, supplier_invoice_id, date, amount, method, reference) VALUES ($1, $2, $3, $4, $5, $6)',
+        // Work in cents to avoid floating point rounding errors
+        const amountCents = Math.round(invoice.amount * 100);
+        const paidCents = Math.round(invoice.amount_paid * 100);
+        const remainingCents = Math.max(0, amountCents - paidCents);
+        const paymentCents = Math.round(paymentData.amount * 100);
+
+        // Block payments when invoice is already fully paid
+        if (remainingCents <= 0) {
+            return res.status(400).json({ message: 'Invoice is already fully paid. No additional payments are allowed.' });
+        }
+        // Prevent overpayments beyond the remaining balance
+        if (paymentCents > remainingCents) {
+            return res.status(400).json({ message: `Payment exceeds remaining balance. Remaining due is ${(remainingCents/100).toFixed(2)}.` });
+        }
+
+        const newPaidCents = paidCents + paymentCents;
+        const newStatus: SupplierInvoice['status'] = newPaidCents >= amountCents ? 'paid' : 'partially_paid';
+        const newAmountPaid = newPaidCents / 100;
+
+        await db.query(
+            'INSERT INTO supplier_payments (id, supplier_invoice_id, date, amount, method, reference) VALUES ($1, $2, $3, $4, $5, $6)',
             [generateId('spay'), invoiceId, paymentData.date, paymentData.amount, paymentData.method, paymentData.reference]
         );
 
-        const updatedInvoice = await db.query('UPDATE supplier_invoices SET amount_paid = $1, status = $2 WHERE id = $3 RETURNING *',
+        const updatedInvoice = await db.query(
+            'UPDATE supplier_invoices SET amount_paid = $1, status = $2 WHERE id = $3 RETURNING *',
             [newAmountPaid, newStatus, invoiceId]
         );
 

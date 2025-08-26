@@ -3,9 +3,9 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import apiRoutes from './api';
 import { errorMiddleware } from './middleware/error.middleware';
-import './types/request'; 
+import './types/request';
 import './init_db'; // Initialize database tables
-
+import path from 'path';
 dotenv.config();
 
 const app = express();
@@ -30,6 +30,10 @@ app.use('/api', apiRoutes);
 app.get('/', (req: express.Request, res: express.Response) => {
   res.send('SalePilot Backend is running!');
 });
+
+
+// Serve static files from uploads directory
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // --- Error Handling ---
 app.use(errorMiddleware);

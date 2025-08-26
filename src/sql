@@ -39,12 +39,16 @@ CREATE TABLE products (
     supplier_id TEXT REFERENCES suppliers(id),
     price DECIMAL(10, 2) NOT NULL,
     cost_price DECIMAL(10, 2),
-    stock INT NOT NULL DEFAULT 0,
+    stock DECIMAL(10, 3) NOT NULL DEFAULT 0,
+    unit_of_measure TEXT NOT NULL DEFAULT 'unit' CHECK (unit_of_measure IN ('unit','kg')),
     image_urls TEXT[], -- PostgreSQL array type is great for this!
     brand TEXT,
     status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
     reorder_point INT,
-    -- Add any other fields from your type, like weight, dimensions, etc.
+    weight DECIMAL(10, 3),
+    dimensions TEXT,
+    safety_stock INT,
+    variants JSONB DEFAULT '[]',
     custom_attributes JSONB -- PostgreSQL's JSONB type is perfect for flexible key-value data
 );
 
@@ -83,7 +87,7 @@ CREATE TABLE sale_items (
     id SERIAL PRIMARY KEY, -- Auto-incrementing integer for the join table
     sale_id TEXT NOT NULL REFERENCES sales(transaction_id) ON DELETE CASCADE,
     product_id TEXT NOT NULL REFERENCES products(id),
-    quantity INT NOT NULL,
+    quantity DECIMAL(10, 3) NOT NULL,
     price_at_sale DECIMAL(10, 2) NOT NULL, -- Price of the item when it was sold
     cost_at_sale DECIMAL(10, 2) -- Cost of the item when it was sold
 );
@@ -202,7 +206,7 @@ CREATE TABLE return_items (
     return_id TEXT NOT NULL REFERENCES returns(id) ON DELETE CASCADE,
     product_id TEXT NOT NULL REFERENCES products(id),
     product_name TEXT NOT NULL,
-    quantity INT NOT NULL,
+    quantity DECIMAL(10, 3) NOT NULL,
     reason TEXT,
     add_to_stock BOOLEAN NOT NULL DEFAULT FALSE
 );
@@ -238,9 +242,9 @@ CREATE TABLE purchase_order_items (
     product_id TEXT NOT NULL REFERENCES products(id),
     product_name TEXT NOT NULL,
     sku TEXT NOT NULL,
-    quantity INT NOT NULL,
+    quantity DECIMAL(10, 3) NOT NULL,
     cost_price DECIMAL(10, 2) NOT NULL,
-    received_quantity INT NOT NULL DEFAULT 0
+    received_quantity DECIMAL(10, 3) NOT NULL DEFAULT 0
 );
 
 CREATE TABLE po_receptions (
@@ -254,7 +258,7 @@ CREATE TABLE po_reception_items (
     reception_id INT NOT NULL REFERENCES po_receptions(id) ON DELETE CASCADE,
     product_id TEXT NOT NULL REFERENCES products(id),
     product_name TEXT NOT NULL,
-    quantity_received INT NOT NULL
+    quantity_received DECIMAL(10, 3) NOT NULL
 );
 
 CREATE INDEX idx_po_supplier_id ON purchase_orders(supplier_id);
@@ -311,8 +315,8 @@ CREATE TABLE stock_take_items (
     product_id TEXT NOT NULL REFERENCES products(id),
     name TEXT NOT NULL,
     sku TEXT NOT NULL,
-    expected INT NOT NULL,
-    counted INT -- Can be NULL if not yet counted
+    expected DECIMAL(10, 3) NOT NULL,
+    counted DECIMAL(10, 3) -- Can be NULL if not yet counted
 );
 
 CREATE INDEX idx_stock_take_items_stock_take_id ON stock_take_items(stock_take_id);

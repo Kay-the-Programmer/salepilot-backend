@@ -11,6 +11,7 @@ export interface Product {
   price: number; // Retail Price
   costPrice?: number;
   stock: number;
+  unitOfMeasure?: 'unit' | 'kg';
   imageUrls: string[];
   supplierId?: string;
   brand?: string;

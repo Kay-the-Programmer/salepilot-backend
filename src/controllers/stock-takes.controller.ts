@@ -36,11 +36,11 @@ export const startStockTake = async (req: express.Request, res: express.Response
         const startTime = new Date().toISOString();
         await db.query("INSERT INTO stock_takes (id, start_time, status) VALUES ($1, $2, 'active')", [id, startTime]);
 
-        const products = await db.query("SELECT id, name, sku, stock FROM products WHERE status = 'active'");
+        const products = await db.query("SELECT id, name, sku, stock FROM products WHERE status = 'active' OR status IS NULL");
         for (const p of products.rows) {
             await db.query(
                 "INSERT INTO stock_take_items (stock_take_id, product_id, name, sku, expected, counted) VALUES ($1, $2, $3, $4, $5, NULL)",
-                [id, p.id, p.name, p.sku, p.stock]
+                [id, p.id, p.name, p.sku ?? '', p.stock]
             );
         }
 
