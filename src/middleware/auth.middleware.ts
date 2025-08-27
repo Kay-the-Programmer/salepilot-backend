@@ -3,12 +3,14 @@ import db from '../db_client';
 import express from 'express';
 import { User } from '../types';
 
+const JWT_SECRET = process.env.JWT_SECRET || 'CHANGE_ME_DEV_ONLY';
+
 export const protect = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
     let token;
     if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
         try {
             token = req.headers.authorization.split(' ')[1];
-            const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { id: string };
+            const decoded = jwt.verify(token, JWT_SECRET) as { id: string };
             
             const result = await db.query('SELECT id, name, email, role FROM users WHERE id = $1', [decoded.id]);
             const user = result.rows[0];

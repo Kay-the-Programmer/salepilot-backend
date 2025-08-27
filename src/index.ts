@@ -12,16 +12,32 @@ const app = express();
 const port = process.env.PORT || 5000;
 
 // --- Middleware ---
-// Configure CORS with specific options
-const corsOptions = {
-  origin: '*', // Allow all origins, or specify your frontend URL like 'http://localhost:3000'
+// Configure CORS with specific options suitable for Vercel/Render
+const allowedOrigins: (string | RegExp)[] = [
+  process.env.FRONTEND_URL || '',
+  /https?:\/\/.+\.vercel\.app$/,
+  /https?:\/\/.+\.onrender\.com$/,
+  'http://localhost:5173',
+  'http://localhost:3000',
+].filter(Boolean) as (string | RegExp)[];
+
+const corsOptions: cors.CorsOptions = {
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true); // allow non-browser tools
+    const isAllowed = allowedOrigins.some((o) =>
+      typeof o === 'string' ? origin === o : (o as RegExp).test(origin)
+    );
+    if (isAllowed) return callback(null, true);
+    return callback(new Error(`CORS: Origin ${origin} not allowed`), false);
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true // Allow cookies and credentials
+  credentials: true,
 };
-app.use(cors(corsOptions)); // Enable Cross-Origin Resource Sharing with specific options
-app.use(express.json({ limit: '50mb' })); // Increase JSON body size limit for base64 images
-app.use(express.urlencoded({ extended: true, limit: '50mb' })); // Increase URL encoded body size limit
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // Handle preflight
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // --- API Routes ---
 app.use('/api', apiRoutes);

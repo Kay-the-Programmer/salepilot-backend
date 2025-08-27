@@ -5,8 +5,12 @@ import { User } from '../types';
 import { generateId, toCamelCase } from '../utils/helpers';
 import express from 'express';
 
+// Use a safe fallback to avoid runtime 500s if JWT_SECRET is missing in env.
+// In production, set JWT_SECRET in your hosting provider (Render) dashboard.
+const JWT_SECRET = process.env.JWT_SECRET || 'CHANGE_ME_DEV_ONLY';
+
 const generateToken = (id: string) => {
-    return jwt.sign({ id }, process.env.JWT_SECRET!, {
+    return jwt.sign({ id }, JWT_SECRET, {
         expiresIn: '30d',
     });
 };
