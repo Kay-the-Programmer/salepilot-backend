@@ -16,12 +16,16 @@ const generateToken = (id: string) => {
 };
 
 export const loginUser = async (req: express.Request, res: express.Response) => {
-    const { email, password } = req.body;
+    const { email, password } = req.body || {};
     try {
-        const result = await db.query('SELECT * FROM users WHERE email = $1', [email.toLowerCase()]);
+        if (!email || !password) {
+            return res.status(400).json({ message: 'Email and password are required' });
+        }
+        const normEmail = String(email).toLowerCase();
+        const result = await db.query('SELECT * FROM users WHERE email = $1', [normEmail]);
         const user = result.rows[0];
 
-        if (user && (await bcrypt.compare(password, user.password_hash))) {
+        if (user && user.password_hash && (await bcrypt.compare(String(password), user.password_hash))) {
             const userResponse = toCamelCase({
                 id: user.id,
                 name: user.name,
@@ -29,36 +33,39 @@ export const loginUser = async (req: express.Request, res: express.Response) => 
                 role: user.role,
                 token: generateToken(user.id),
             });
-            res.json(userResponse);
-        } else {
-            res.status(401).json({ message: 'Invalid credentials' });
+            return res.json(userResponse);
         }
+        return res.status(401).json({ message: 'Invalid credentials' });
     } catch (error) {
         console.error('Login error:', error);
-        res.status(500).json({ message: 'Server error during login' });
+        return res.status(500).json({ message: 'Server error during login' });
     }
 };
 
 export const registerUser = async (req: express.Request, res: express.Response) => {
-    const { name, email, password } = req.body;
+    const { name, email, password } = req.body || {};
     if (!name || !email || !password) {
         return res.status(400).json({ message: 'Please add all fields' });
     }
+    if (String(password).length < 8) {
+        return res.status(400).json({ message: 'Password must be at least 8 characters long.' });
+    }
 
     try {
-        const userExistsResult = await db.query('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
+        const normEmail = String(email).toLowerCase();
+        const userExistsResult = await db.query('SELECT id FROM users WHERE email = $1', [normEmail]);
         if ((userExistsResult.rowCount ?? 0) > 0) {
-            return res.status(400).json({ message: 'User already exists' });
+            return res.status(409).json({ message: 'User already exists' });
         }
 
         const salt = await bcrypt.genSalt(10);
-        const password_hash = await bcrypt.hash(password, salt);
+        const password_hash = await bcrypt.hash(String(password), salt);
         const id = generateId('user');
         const role = 'staff'; // Default role
 
         const insertResult = await db.query(
             'INSERT INTO users(id, name, email, password_hash, role) VALUES($1, $2, $3, $4, $5) RETURNING id, name, email, role',
-            [id, name, email.toLowerCase(), password_hash, role]
+            [id, String(name), normEmail, password_hash, role]
         );
         const newUser = insertResult.rows[0];
 
@@ -67,10 +74,13 @@ export const registerUser = async (req: express.Request, res: express.Response) 
             token: generateToken(newUser.id),
         });
 
-        res.status(201).json(userResponse);
-    } catch (error) {
+        return res.status(201).json(userResponse);
+    } catch (error: any) {
         console.error('Registration error:', error);
-        res.status(500).json({ message: 'Server error during registration' });
+        // Uniqueness violation fallback
+        const message = (error?.code === '23505') ? 'User already exists' : 'Server error during registration';
+        const status = (error?.code === '23505') ? 409 : 500;
+        return res.status(status).json({ message });
     }
 };
 

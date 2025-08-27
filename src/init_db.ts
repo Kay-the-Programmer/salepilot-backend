@@ -7,6 +7,17 @@ async function initializeDatabase() {
     try {
         await client.query('BEGIN'); // Start transaction
 
+        // Ensure users table exists for authentication
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                email TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL CHECK (role IN ('admin','staff','inventory_manager'))
+            );
+        `);
+
         // --- Minimal, idempotent migrations to align schema with current code ---
         // Ensure unit_of_measure exists on products for KG support
         await client.query(`
