@@ -1,9 +1,8 @@
 import { User, AuditLog } from '../types';
 import db from '../db_client';
 import { generateId } from '../utils/helpers';
-import { Pool, PoolClient } from 'pg';
 
-type DBClient = Pool | PoolClient;
+type DBClient = { query: (text: string, params?: any[]) => Promise<any> };
 
 export const auditService = {
     log: async (user: User, action: string, details: string, client?: DBClient) => {

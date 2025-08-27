@@ -18,7 +18,7 @@ export const getUsers = async (req: express.Request, res: express.Response) => {
 export const getUserById = async (req: express.Request, res: express.Response) => {
     try {
         const result = await db.query('SELECT id, name, email, role FROM users WHERE id = $1', [req.params.id]);
-        if (result.rowCount === 0) {
+        if ((result.rowCount ?? 0) === 0) {
             return res.status(404).json({ message: 'User not found' });
         }
         res.status(200).json(toCamelCase(result.rows[0]));
@@ -36,7 +36,7 @@ export const createUser = async (req: express.Request, res: express.Response) =>
 
     try {
         const userExists = await db.query('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
-        if (userExists.rowCount > 0) {
+        if ((userExists.rowCount ?? 0) > 0) {
             return res.status(400).json({ message: 'Email is already in use' });
         }
 
@@ -65,7 +65,7 @@ export const updateUser = async (req: express.Request, res: express.Response) =>
     try {
         if (email) {
             const emailCheck = await db.query('SELECT id FROM users WHERE email = $1 AND id != $2', [email.toLowerCase(), id]);
-            if (emailCheck.rowCount > 0) {
+            if ((emailCheck.rowCount ?? 0) > 0) {
                 return res.status(400).json({ message: 'Email is already in use by another account' });
             }
         }
@@ -75,7 +75,7 @@ export const updateUser = async (req: express.Request, res: express.Response) =>
             [name, email.toLowerCase(), role, id]
         );
 
-        if (result.rowCount === 0) {
+        if ((result.rowCount ?? 0) === 0) {
             return res.status(404).json({ message: 'User not found' });
         }
 
@@ -97,7 +97,7 @@ export const deleteUser = async (req: express.Request, res: express.Response) =>
 
     try {
         const userResult = await db.query('SELECT role, name, email FROM users WHERE id = $1', [id]);
-        if (userResult.rowCount === 0) {
+        if ((userResult.rowCount ?? 0) === 0) {
             return res.status(404).json({ message: 'User not found' });
         }
         const userToDelete = userResult.rows[0];

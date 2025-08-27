@@ -43,7 +43,7 @@ export const registerUser = async (req: express.Request, res: express.Response) 
 
     try {
         const userExistsResult = await db.query('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
-        if (userExistsResult.rowCount > 0) {
+        if ((userExistsResult.rowCount ?? 0) > 0) {
             return res.status(400).json({ message: 'User already exists' });
         }
 
@@ -77,7 +77,7 @@ export const getCurrentUser = (req: express.Request, res: express.Response) => {
 export const forgotPassword = async (req: express.Request, res: express.Response) => {
     const { email } = req.body;
     const result = await db.query('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
-    if (result.rowCount > 0) {
+    if ((result.rowCount ?? 0) > 0) {
         // In a real app, you would generate a token and send an email
         console.log(`Password reset link would be sent to ${email}`);
     } else {

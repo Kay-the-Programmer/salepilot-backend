@@ -42,7 +42,7 @@ export const updateCategory = async (req: express.Request, res: express.Response
             'UPDATE categories SET name = $1, parent_id = $2, attributes = $3, revenue_account_id = $4, cogs_account_id = $5 WHERE id = $6 RETURNING *',
             [name, parentId || null, JSON.stringify(attributes || []), revenueAccountId, cogsAccountId, id]
         );
-        if (result.rowCount === 0) {
+        if ((result.rowCount ?? 0) === 0) {
             return res.status(404).json({ message: 'Category not found' });
         }
         const updatedCategory = result.rows[0];
@@ -58,17 +58,17 @@ export const deleteCategory = async (req: express.Request, res: express.Response
     const { id } = req.params;
     try {
         const productUsage = await db.query('SELECT 1 FROM products WHERE category_id = $1 LIMIT 1', [id]);
-        if (productUsage.rowCount > 0) {
+        if ((productUsage.rowCount ?? 0) > 0) {
             return res.status(400).json({ message: 'Cannot delete category in use by products.' });
         }
 
         const parentUsage = await db.query('SELECT 1 FROM categories WHERE parent_id = $1 LIMIT 1', [id]);
-        if (parentUsage.rowCount > 0) {
+        if ((parentUsage.rowCount ?? 0) > 0) {
             return res.status(400).json({ message: 'Cannot delete category with sub-categories.' });
         }
 
         const result = await db.query('DELETE FROM categories WHERE id = $1 RETURNING name', [id]);
-        if (result.rowCount === 0) {
+        if ((result.rowCount ?? 0) === 0) {
             return res.status(404).json({ message: 'Category not found' });
         }
 

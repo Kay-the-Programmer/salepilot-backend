@@ -38,7 +38,8 @@ export const generateDescription = async (req: express.Request, res: express.Res
             }
         });
 
-        res.status(200).json({ description: response.text.trim() });
+        const description = (response.text ?? '').trim();
+        res.status(200).json({ description });
     } catch (error) {
         console.error("Error generating description with Gemini API:", error);
         res.status(500).json({ message: 'Failed to generate AI description. Please try again.' });

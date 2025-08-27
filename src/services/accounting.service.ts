@@ -1,9 +1,8 @@
-import { Pool, PoolClient } from 'pg';
 import { Account, Sale, Product, Category, JournalEntry, JournalEntryLine, Return, Payment, SupplierPayment, SupplierInvoice, StoreSettings } from '../types';
 import db from '../db_client';
 import { generateId } from '../utils/helpers';
 
-type DBClient = Pool | PoolClient;
+type DBClient = { query: (text: string, params?: any[]) => Promise<any> };
 
 const findAccount = async (subType: Account['subType'], client?: DBClient) => {
     const dbClient = client || db;

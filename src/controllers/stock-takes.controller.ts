@@ -6,7 +6,7 @@ import { toCamelCase } from '../utils/helpers';
 
 const getActiveSessionWithItems = async () => {
     const sessionRes = await db.query("SELECT * FROM stock_takes WHERE status = 'active' LIMIT 1");
-    if (sessionRes.rowCount === 0) return null;
+    if ((sessionRes.rowCount ?? 0) === 0) return null;
     const session = sessionRes.rows[0];
 
     const itemsRes = await db.query("SELECT * FROM stock_take_items WHERE stock_take_id = $1 ORDER BY name", [session.id]);
@@ -28,7 +28,7 @@ export const startStockTake = async (req: express.Request, res: express.Response
     // Should be a transaction
     try {
         const existing = await db.query("SELECT id FROM stock_takes WHERE status = 'active' LIMIT 1");
-        if (existing.rowCount > 0) {
+        if ((existing.rowCount ?? 0) > 0) {
             return res.status(400).json({ message: 'A stock take is already in progress.' });
         }
 
@@ -56,7 +56,7 @@ export const startStockTake = async (req: express.Request, res: express.Response
 export const updateStockTakeItem = async (req: express.Request, res: express.Response) => {
     try {
         const session = await db.query("SELECT id FROM stock_takes WHERE status = 'active' LIMIT 1");
-        if (session.rowCount === 0) {
+        if ((session.rowCount ?? 0) === 0) {
             return res.status(404).json({ message: 'No active stock take session.' });
         }
         const sessionId = session.rows[0].id;
@@ -76,7 +76,7 @@ export const updateStockTakeItem = async (req: express.Request, res: express.Res
 export const cancelStockTake = async (req: express.Request, res: express.Response) => {
     try {
         const sessionRes = await db.query("SELECT id FROM stock_takes WHERE status = 'active' LIMIT 1");
-        if (sessionRes.rowCount === 0) {
+        if ((sessionRes.rowCount ?? 0) === 0) {
             return res.status(404).json({ message: 'No active stock take session to cancel.' });
         }
         const sessionId = sessionRes.rows[0].id;
