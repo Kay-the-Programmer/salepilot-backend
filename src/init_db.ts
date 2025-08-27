@@ -49,18 +49,7 @@ async function initializeDatabase() {
                 notes TEXT
             );
         `);
-        // Categories
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS categories (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                parent_id TEXT REFERENCES categories(id) ON DELETE SET NULL,
-                attributes JSONB NOT NULL DEFAULT '[]',
-                revenue_account_id TEXT REFERENCES accounts(id) ON DELETE SET NULL,
-                cogs_account_id TEXT REFERENCES accounts(id) ON DELETE SET NULL
-            );
-        `);
-        // Accounts (needed for references above)
+        // Accounts (needed for references below)
         await client.query(`
             CREATE TABLE IF NOT EXISTS accounts (
                 id TEXT PRIMARY KEY,
@@ -71,6 +60,17 @@ async function initializeDatabase() {
                 balance DECIMAL(12,2) NOT NULL DEFAULT 0,
                 is_debit_normal BOOLEAN NOT NULL,
                 description TEXT
+            );
+        `);
+        // Categories
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS categories (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                parent_id TEXT REFERENCES categories(id) ON DELETE SET NULL,
+                attributes JSONB NOT NULL DEFAULT '[]',
+                revenue_account_id TEXT REFERENCES accounts(id) ON DELETE SET NULL,
+                cogs_account_id TEXT REFERENCES accounts(id) ON DELETE SET NULL
             );
         `);
         // Products
