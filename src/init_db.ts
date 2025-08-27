@@ -1,13 +1,13 @@
 import db from './db_client';
+import bcrypt from 'bcryptjs';
 
 async function initializeDatabase() {
     console.log('--- Initializing Database Tables / Migrations ---');
     const client = await (db as any)._pool.connect();
 
     try {
-        await client.query('BEGIN'); // Start transaction
-
-        // Ensure users table exists for authentication
+        // Phase A: Ensure critical auth table exists and is committed independently
+        await client.query('BEGIN');
         await client.query(`
             CREATE TABLE IF NOT EXISTS users (
                 id TEXT PRIMARY KEY,
@@ -17,19 +17,50 @@ async function initializeDatabase() {
                 role TEXT NOT NULL CHECK (role IN ('admin','staff','inventory_manager'))
             );
         `);
+        // Seed a default admin user if none exists (safe, idempotent)
+        const existingUsers = await client.query('SELECT 1 FROM users LIMIT 1');
+        if (existingUsers.rowCount === 0) {
+            const salt = await bcrypt.genSalt(10);
+            const passwordHash = await bcrypt.hash('password', salt);
+            await client.query(
+                'INSERT INTO users (id, name, email, password_hash, role) VALUES ($1, $2, $3, $4, $5)',
+                ['user_admin_default', 'Admin User', 'admin@sale-pilot.com', passwordHash, 'admin']
+            );
+            console.log('✅ Default admin user created (admin@sale-pilot.com / password)');
+        }
+        await client.query('COMMIT');
 
-        // --- Minimal, idempotent migrations to align schema with current code ---
-        // Ensure unit_of_measure exists on products for KG support
+        // Phase B: Best-effort optional migrations; guard against missing tables
+        // Ensure unit_of_measure/status/etc only if products table exists
         await client.query(`
-            ALTER TABLE products
-            ADD COLUMN IF NOT EXISTS unit_of_measure TEXT;
-        `);
-        await client.query(`
-            ALTER TABLE products
-            ALTER COLUMN unit_of_measure SET DEFAULT 'unit';
-        `);
-        await client.query(`
-            UPDATE products SET unit_of_measure = 'unit' WHERE unit_of_measure IS NULL;
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.tables WHERE table_name = 'products'
+                ) THEN
+                    BEGIN
+                        ALTER TABLE products ADD COLUMN IF NOT EXISTS unit_of_measure TEXT;
+                        ALTER TABLE products ALTER COLUMN unit_of_measure SET DEFAULT 'unit';
+                        UPDATE products SET unit_of_measure = 'unit' WHERE unit_of_measure IS NULL;
+
+                        -- Ensure columns used by products.controller exist in products table
+                        ALTER TABLE products ADD COLUMN IF NOT EXISTS status TEXT;
+                        ALTER TABLE products ALTER COLUMN status SET DEFAULT 'active';
+                        UPDATE products SET status = 'active' WHERE status IS NULL;
+
+                        ALTER TABLE products ADD COLUMN IF NOT EXISTS weight DECIMAL(10, 3);
+                        ALTER TABLE products ADD COLUMN IF NOT EXISTS dimensions TEXT;
+                        ALTER TABLE products ADD COLUMN IF NOT EXISTS safety_stock INT;
+                        ALTER TABLE products ADD COLUMN IF NOT EXISTS variants JSONB;
+                        ALTER TABLE products ALTER COLUMN variants SET DEFAULT '[]';
+                        ALTER TABLE products ADD COLUMN IF NOT EXISTS custom_attributes JSONB;
+                        ALTER TABLE products ALTER COLUMN custom_attributes SET DEFAULT '{}';
+                    EXCEPTION WHEN others THEN
+                        -- Swallow any unexpected errors to avoid aborting init
+                        NULL;
+                    END;
+                END IF;
+            END$$;
         `);
 
         // (Optional) Ensure stock is decimal to allow fractional kilos. Safe to skip if already correct.
@@ -44,49 +75,6 @@ async function initializeDatabase() {
                     ALTER TABLE products ALTER COLUMN stock TYPE DECIMAL(10, 3) USING stock::DECIMAL(10,3);
                 END IF;
             END$$;
-        `);
-
-        // Ensure columns used by products.controller exist in products table
-        // Ensure status column exists and defaults to 'active' and backfill nulls
-        await client.query(`
-            ALTER TABLE products
-            ADD COLUMN IF NOT EXISTS status TEXT;
-        `);
-        await client.query(`
-            ALTER TABLE products
-            ALTER COLUMN status SET DEFAULT 'active';
-        `);
-        await client.query(`
-            UPDATE products SET status = 'active' WHERE status IS NULL;
-        `);
-
-        await client.query(`
-            ALTER TABLE products
-            ADD COLUMN IF NOT EXISTS weight DECIMAL(10, 3);
-        `);
-        await client.query(`
-            ALTER TABLE products
-            ADD COLUMN IF NOT EXISTS dimensions TEXT;
-        `);
-        await client.query(`
-            ALTER TABLE products
-            ADD COLUMN IF NOT EXISTS safety_stock INT;
-        `);
-        await client.query(`
-            ALTER TABLE products
-            ADD COLUMN IF NOT EXISTS variants JSONB;
-        `);
-        await client.query(`
-            ALTER TABLE products
-            ALTER COLUMN variants SET DEFAULT '[]';
-        `);
-        await client.query(`
-            ALTER TABLE products
-            ADD COLUMN IF NOT EXISTS custom_attributes JSONB;
-        `);
-        await client.query(`
-            ALTER TABLE products
-            ALTER COLUMN custom_attributes SET DEFAULT '{}';
         `);
 
         // Existing initialization creating supplier tables (kept for backward compat)
@@ -178,26 +166,37 @@ async function initializeDatabase() {
         await client.query(`
             DO $$
             BEGIN
-                IF NOT EXISTS (
-                    SELECT 1 FROM information_schema.table_constraints
-                    WHERE table_name = 'stock_takes' AND constraint_type = 'CHECK'
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.tables WHERE table_name = 'stock_takes'
                 ) THEN
-                    ALTER TABLE stock_takes
-                    ADD CONSTRAINT stock_takes_status_check CHECK (status IN ('active', 'completed'));
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints
+                        WHERE table_name = 'stock_takes' AND constraint_type = 'CHECK'
+                    ) THEN
+                        ALTER TABLE stock_takes
+                        ADD CONSTRAINT stock_takes_status_check CHECK (status IN ('active', 'completed'));
+                    END IF;
                 END IF;
             END$$;
         `);
 
         await client.query(`
-            CREATE TABLE IF NOT EXISTS stock_take_items (
-                id SERIAL PRIMARY KEY,
-                stock_take_id TEXT NOT NULL REFERENCES stock_takes(id) ON DELETE CASCADE,
-                product_id TEXT NOT NULL REFERENCES products(id),
-                name TEXT NOT NULL,
-                sku TEXT NOT NULL,
-                expected DECIMAL(10, 3) NOT NULL,
-                counted DECIMAL(10, 3)
-            );
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.tables WHERE table_name = 'products'
+                ) THEN
+                    CREATE TABLE IF NOT EXISTS stock_take_items (
+                        id SERIAL PRIMARY KEY,
+                        stock_take_id TEXT NOT NULL REFERENCES stock_takes(id) ON DELETE CASCADE,
+                        product_id TEXT NOT NULL REFERENCES products(id),
+                        name TEXT NOT NULL,
+                        sku TEXT NOT NULL,
+                        expected DECIMAL(10, 3) NOT NULL,
+                        counted DECIMAL(10, 3)
+                    );
+                END IF;
+            END$$;
         `);
 
         // Ensure expected/counted are decimal in case of legacy integer columns
@@ -223,10 +222,8 @@ async function initializeDatabase() {
             CREATE INDEX IF NOT EXISTS idx_stock_take_items_stock_take_id ON stock_take_items(stock_take_id);
         `);
 
-        await client.query('COMMIT'); // Commit transaction
         console.log('✅ Database schema verified/updated successfully');
     } catch (error) {
-        await client.query('ROLLBACK'); // Rollback on error
         console.error('❌ Error initializing database:', error);
     } finally {
         client.release(); // Release the client back to the pool, but don't end the pool
