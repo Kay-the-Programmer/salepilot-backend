@@ -71,9 +71,15 @@ const deleteImageFiles = (imageUrls: string[]) => {
 
 export const getProducts = async (req: express.Request, res: express.Response) => {
     try {
+        const storeId = (req as any).tenant?.storeId || req.user?.currentStoreId;
+        if (!storeId) {
+            return res.status(400).json({ message: 'Store context required' });
+        }
         const { name, sku, categoryId, supplierId, stockStatus } = req.query as any;
         const where: string[] = [];
         const params: any[] = [];
+        // Enforce tenant boundary first
+        params.push(storeId); where.push(`store_id = $${params.length}`);
         if (name) { params.push(`%${name}%`); where.push(`LOWER(name) LIKE LOWER($${params.length})`); }
         if (sku) { params.push(`%${sku}%`); where.push(`LOWER(sku) LIKE LOWER($${params.length})`); }
         if (categoryId) { params.push(categoryId); where.push(`category_id = $${params.length}`); }
@@ -100,7 +106,11 @@ export const getProducts = async (req: express.Request, res: express.Response) =
 
 export const getProductById = async (req: express.Request, res: express.Response) => {
     try {
-        const result = await db.query('SELECT * FROM products WHERE id = $1', [req.params.id]);
+        const storeId = (req as any).tenant?.storeId || req.user?.currentStoreId;
+        if (!storeId) {
+            return res.status(400).json({ message: 'Store context required' });
+        }
+        const result = await db.query('SELECT * FROM products WHERE id = $1 AND store_id = $2', [req.params.id, storeId]);
         if (result.rowCount === 0) {
             return res.status(404).json({ message: 'Product not found' });
         }
@@ -113,6 +123,10 @@ export const getProductById = async (req: express.Request, res: express.Response
 
 export const createProduct = async (req: express.Request, res: express.Response) => {
     try {
+        const storeId = (req as any).tenant?.storeId || req.user?.currentStoreId;
+        if (!storeId) {
+            return res.status(400).json({ message: 'Store context required' });
+        }
         console.log('Creating product with data:', req.body);
         console.log('Files received:', req.files);
 
@@ -196,8 +210,8 @@ export const createProduct = async (req: express.Request, res: express.Response)
         }
 
         const queryText = `
-            INSERT INTO products(id, name, description, sku, barcode, category_id, supplier_id, price, cost_price, stock, unit_of_measure, image_urls, brand, status, reorder_point, weight, dimensions, safety_stock, variants, custom_attributes)
-            VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+            INSERT INTO products(id, name, description, sku, barcode, category_id, supplier_id, price, cost_price, stock, unit_of_measure, image_urls, brand, status, reorder_point, weight, dimensions, safety_stock, variants, custom_attributes, store_id)
+            VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
             RETURNING *;
         `;
         const values = [
@@ -220,7 +234,8 @@ export const createProduct = async (req: express.Request, res: express.Response)
             processedValues.dimensions,
             processedValues.safetyStock,
             JSON.stringify(processedValues.variants || []),
-            JSON.stringify(processedValues.customAttributes)
+            JSON.stringify(processedValues.customAttributes),
+            storeId
         ];
 
         console.log('Executing query with values:', values);
@@ -294,7 +309,11 @@ export const updateProduct = async (req: express.Request, res: express.Response)
     const files = (req.files as Express.Multer.File[]) || [];
 
     try {
-        const currentProductResult = await db.query('SELECT image_urls FROM products WHERE id = $1', [id]);
+        const storeId = (req as any).tenant?.storeId || req.user?.currentStoreId;
+        if (!storeId) {
+            return res.status(400).json({ message: 'Store context required' });
+        }
+        const currentProductResult = await db.query('SELECT image_urls FROM products WHERE id = $1 AND store_id = $2', [id, storeId]);
         if (currentProductResult.rowCount === 0) {
             if (files.length > 0) {
                 deleteImageFiles(files.map(file => `/uploads/products/${file.filename}`));
@@ -354,7 +373,7 @@ export const updateProduct = async (req: express.Request, res: express.Response)
             SET name = $1, description = $2, sku = $3, barcode = $4, category_id = $5, supplier_id = $6, price = $7,
                 cost_price = $8, stock = $9, unit_of_measure = $10, image_urls = $11, brand = $12, status = $13, reorder_point = $14,
                 custom_attributes = $15, weight = $16, dimensions = $17, safety_stock = $18, variants = $19
-            WHERE id = $20
+            WHERE id = $20 AND store_id = $21
             RETURNING *;
         `;
 
@@ -378,7 +397,8 @@ export const updateProduct = async (req: express.Request, res: express.Response)
             dimensions || null,
             safety_stock != null && safety_stock !== '' ? parseInt(safety_stock.toString(), 10) : null,
             (() => { try { return JSON.stringify(typeof variants === 'string' ? JSON.parse(variants) : (variants || [])); } catch { return JSON.stringify([]); } })(),
-            id
+            id,
+            storeId
         ];
 
         const result = await db.query(queryText, values);
@@ -447,7 +467,11 @@ export const updateProduct = async (req: express.Request, res: express.Response)
 export const deleteProduct = async (req: express.Request, res: express.Response) => {
     const { id } = req.params;
     try {
-        const productInfoResult = await db.query('SELECT name, sku FROM products WHERE id = $1', [id]);
+        const storeId = (req as any).tenant?.storeId || req.user?.currentStoreId;
+        if (!storeId) {
+            return res.status(400).json({ message: 'Store context required' });
+        }
+        const productInfoResult = await db.query('SELECT name, sku FROM products WHERE id = $1 AND store_id = $2', [id, storeId]);
         if (productInfoResult.rowCount === 0) {
             return res.status(404).json({ message: 'Product not found' });
         }
@@ -462,7 +486,7 @@ export const deleteProduct = async (req: express.Request, res: express.Response)
             });
         }
 
-        await db.query('DELETE FROM products WHERE id = $1', [id]);
+        await db.query('DELETE FROM products WHERE id = $1 AND store_id = $2', [id, storeId]);
 
         await auditService.log(req.user!, 'Product Deleted', `Product: "${deletedProductInfo.name}" (SKU: ${deletedProductInfo.sku})`);
         res.status(200).json({ message: 'Product deleted' });
@@ -475,7 +499,11 @@ export const deleteProduct = async (req: express.Request, res: express.Response)
 export const archiveProduct = async (req: express.Request, res: express.Response) => {
     const { id } = req.params;
     try {
-        const productResult = await db.query('SELECT status, name FROM products WHERE id = $1', [id]);
+        const storeId = (req as any).tenant?.storeId || req.user?.currentStoreId;
+        if (!storeId) {
+            return res.status(400).json({ message: 'Store context required' });
+        }
+        const productResult = await db.query('SELECT status, name FROM products WHERE id = $1 AND store_id = $2', [id, storeId]);
         if (productResult.rowCount === 0) {
             return res.status(404).json({ message: 'Product not found' });
         }
@@ -483,7 +511,7 @@ export const archiveProduct = async (req: express.Request, res: express.Response
         const product = productResult.rows[0];
         const newStatus = product.status === 'active' ? 'archived' : 'active';
 
-        const updateResult = await db.query('UPDATE products SET status = $1 WHERE id = $2 RETURNING *', [newStatus, id]);
+        const updateResult = await db.query('UPDATE products SET status = $1 WHERE id = $2 AND store_id = $3 RETURNING *', [newStatus, id, storeId]);
 
         const action = newStatus === 'archived' ? 'Product Archived' : 'Product Restored';
         await auditService.log(req.user!, action, `Product: "${product.name}" (ID: ${id})`);
@@ -504,7 +532,11 @@ export const adjustStock = async (req: express.Request, res: express.Response) =
     }
 
     try {
-        const productResult = await db.query('SELECT * FROM products WHERE id = $1', [id]);
+        const storeId = (req as any).tenant?.storeId || req.user?.currentStoreId;
+        if (!storeId) {
+            return res.status(400).json({ message: 'Store context required' });
+        }
+        const productResult = await db.query('SELECT * FROM products WHERE id = $1 AND store_id = $2', [id, storeId]);
         if (productResult.rowCount === 0) {
             return res.status(404).json({ message: 'Product not found' });
         }
@@ -535,7 +567,7 @@ export const adjustStock = async (req: express.Request, res: express.Response) =
             return res.status(400).json({ message: 'Invalid resulting stock level.' });
         }
 
-        const updateResult = await db.query('UPDATE products SET stock = $1 WHERE id = $2 RETURNING *', [finalStock, id]);
+        const updateResult = await db.query('UPDATE products SET stock = $1 WHERE id = $2 AND store_id = $3 RETURNING *', [finalStock, id, storeId]);
 
         const actionDetail = delta === null ? '' : ` | Change: ${delta >= 0 ? '+' : ''}${delta}`;
         await auditService.log(
@@ -544,7 +576,7 @@ export const adjustStock = async (req: express.Request, res: express.Response) =
             `Product: "${product.name}" | From: ${oldQuantity} To: ${finalStock}${actionDetail} | Reason: ${reason}`
         );
 
-        await accountingService.recordStockAdjustment(product, oldQuantity, reason);
+        await accountingService.recordStockAdjustment(product, oldQuantity, reason, undefined, storeId);
 
         res.status(200).json(toCamelCase(updateResult.rows[0]));
     } catch (error) {

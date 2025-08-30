@@ -6,10 +6,55 @@ import { toCamelCase } from '../utils/helpers';
 
 export const getSettings = async (req: express.Request, res: express.Response) => {
     try {
-        const result = await db.query('SELECT * FROM store_settings WHERE id = 1');
+        const storeId = (req as any).tenant?.storeId;
+        if (!storeId) {
+            return res.status(400).json({ message: 'No store selected. Please select a store first.' });
+        }
+
+        const result = await db.query('SELECT * FROM store_settings WHERE store_id = $1', [storeId]);
         if (result.rowCount === 0) {
-            // Should not happen if DB is seeded, but handle it gracefully
-            return res.status(404).json({ message: 'Store settings not found. Please configure them.' });
+            // Create default settings for this store on first access
+            // Pull store name from the stores table so the Settings module reflects the registered store name
+            const storeRes = await db.query('SELECT name FROM stores WHERE id = $1', [storeId]);
+            const registeredStoreName: string = storeRes.rows?.[0]?.name || 'My Store';
+
+            const defaults: Partial<StoreSettings> = {
+                name: registeredStoreName,
+                address: '',
+                phone: '',
+                email: '',
+                website: '',
+                taxRate: 0,
+                currency: { symbol: '$', code: 'USD', position: 'before' },
+                receiptMessage: '',
+                lowStockThreshold: 5,
+                skuPrefix: 'SKU-',
+                enableStoreCredit: false,
+                paymentMethods: [],
+                supplierPaymentMethods: []
+            };
+            const insert = await db.query(
+                `INSERT INTO store_settings (store_id, name, address, phone, email, website, tax_rate, currency, receipt_message, low_stock_threshold, sku_prefix, enable_store_credit, payment_methods, supplier_payment_methods)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+                 RETURNING *;`,
+                [
+                    storeId,
+                    defaults.name,
+                    defaults.address,
+                    defaults.phone,
+                    defaults.email,
+                    defaults.website,
+                    defaults.taxRate,
+                    JSON.stringify(defaults.currency),
+                    defaults.receiptMessage,
+                    defaults.lowStockThreshold,
+                    defaults.skuPrefix,
+                    defaults.enableStoreCredit,
+                    JSON.stringify(defaults.paymentMethods),
+                    JSON.stringify(defaults.supplierPaymentMethods)
+                ]
+            );
+            return res.status(200).json(toCamelCase(insert.rows[0]));
         }
 
         res.status(200).json(toCamelCase(result.rows[0]));
@@ -22,6 +67,11 @@ export const getSettings = async (req: express.Request, res: express.Response) =
 export const updateSettings = async (req: express.Request, res: express.Response) => {
     const newSettings: StoreSettings = req.body;
     try {
+        const storeId = (req as any).tenant?.storeId;
+        if (!storeId) {
+            return res.status(400).json({ message: 'No store selected. Please select a store first.' });
+        }
+
         // Ensure taxRate is never null - default to 0 if not provided
         if (newSettings.taxRate === null || newSettings.taxRate === undefined) {
             newSettings.taxRate = 0;
@@ -37,9 +87,9 @@ export const updateSettings = async (req: express.Request, res: express.Response
         newSettings.enableStoreCredit = newSettings.enableStoreCredit === true;
 
         const query = `
-            INSERT INTO store_settings (id, name, address, phone, email, website, tax_rate, currency, receipt_message, low_stock_threshold, sku_prefix, enable_store_credit, payment_methods, supplier_payment_methods)
-            VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-            ON CONFLICT (id) DO UPDATE SET
+            INSERT INTO store_settings (store_id, name, address, phone, email, website, tax_rate, currency, receipt_message, low_stock_threshold, sku_prefix, enable_store_credit, payment_methods, supplier_payment_methods)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            ON CONFLICT (store_id) DO UPDATE SET
                                            name = EXCLUDED.name,
                                            address = EXCLUDED.address,
                                            phone = EXCLUDED.phone,
@@ -56,6 +106,7 @@ export const updateSettings = async (req: express.Request, res: express.Response
             RETURNING *;
         `;
         const values = [
+            storeId,
             newSettings.name, newSettings.address, newSettings.phone, newSettings.email, newSettings.website,
             newSettings.taxRate, JSON.stringify(newSettings.currency), newSettings.receiptMessage, newSettings.lowStockThreshold,
             newSettings.skuPrefix, newSettings.enableStoreCredit, JSON.stringify(newSettings.paymentMethods), JSON.stringify(newSettings.supplierPaymentMethods)

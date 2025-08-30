@@ -12,22 +12,22 @@ export const getDashboardData = async (req: express.Request, res: express.Respon
 
 
     try {
+        const storeId = (req as any).tenant?.storeId || req.user?.currentStoreId;
+        if (!storeId) {
+            return res.status(400).json({ message: 'Store context required' });
+        }
         // --- Sales Calculations ---
         const salesQuery = `
             SELECT
                 COALESCE(SUM(s.total), 0) AS "totalRevenue",
-                COALESCE(SUM(s.total - si.total_cost), 0) AS "totalProfit",
-                COALESCE(SUM(si.total_cost), 0) AS "totalCogs",
+                COALESCE(SUM(s.total) - SUM(si.cost_at_sale * si.quantity), 0) AS "totalProfit",
+                COALESCE(SUM(si.cost_at_sale * si.quantity), 0) AS "totalCogs",
                 COUNT(DISTINCT s.transaction_id) AS "totalTransactions"
             FROM sales s
-                     JOIN (
-                SELECT sale_id, SUM(cost_at_sale * quantity) as total_cost
-                FROM sale_items
-                GROUP BY sale_id
-            ) si ON s.transaction_id = si.sale_id
-            WHERE s.timestamp BETWEEN $1 AND $2 AND s.payment_status = 'paid';
+            JOIN sale_items si ON s.transaction_id = si.sale_id AND si.store_id = $3
+            WHERE s.timestamp BETWEEN $1 AND $2 AND s.payment_status = 'paid' AND s.store_id = $3;
         `;
-        const salesResult = await db.query(salesQuery, [startDate, adjustedEndDate]);
+        const salesResult = await db.query(salesQuery, [startDate, adjustedEndDate, storeId]);
         const salesData = salesResult.rows[0];
 
         // --- Sales Trend ---
@@ -35,18 +35,14 @@ export const getDashboardData = async (req: express.Request, res: express.Respon
             SELECT
                 DATE(s.timestamp) as date,
                 SUM(s.total) as revenue,
-                SUM(s.total - si.total_cost) as profit
+                SUM(s.total) - SUM(si.cost_at_sale * si.quantity) as profit
             FROM sales s
-                     JOIN (
-                SELECT sale_id, SUM(cost_at_sale * quantity) as total_cost
-                FROM sale_items
-                GROUP BY sale_id
-            ) si ON s.transaction_id = si.sale_id
-            WHERE s.timestamp BETWEEN $1 AND $2 AND s.payment_status = 'paid'
+            JOIN sale_items si ON s.transaction_id = si.sale_id AND si.store_id = $3
+            WHERE s.timestamp BETWEEN $1 AND $2 AND s.payment_status = 'paid' AND s.store_id = $3 AND si.store_id = $3
             GROUP BY DATE(s.timestamp)
             ORDER BY date ASC;
         `;
-        const trendResult = await db.query(trendQuery, [startDate, adjustedEndDate]);
+        const trendResult = await db.query(trendQuery, [startDate, adjustedEndDate, storeId]);
         const salesTrend = trendResult.rows.reduce((acc, row) => {
             const dateStr = new Date(row.date).toISOString().split('T')[0];
             acc[dateStr] = { revenue: parseFloat(row.revenue), profit: parseFloat(row.profit) };
@@ -59,12 +55,12 @@ export const getDashboardData = async (req: express.Request, res: express.Respon
             FROM sale_items si
                      JOIN products p ON si.product_id = p.id
                      JOIN sales s ON si.sale_id = s.transaction_id
-            WHERE s.timestamp BETWEEN $1 AND $2 AND s.payment_status = 'paid'
+            WHERE s.timestamp BETWEEN $1 AND $2 AND s.payment_status = 'paid' AND s.store_id = $3
             GROUP BY p.name
             ORDER BY revenue DESC
             LIMIT 10;
         `;
-        const topProductsRevenueResult = await db.query(topProductsRevenueQuery, [startDate, adjustedEndDate]);
+        const topProductsRevenueResult = await db.query(topProductsRevenueQuery, [startDate, adjustedEndDate, storeId]);
 
         // --- Top Products by Quantity ---
         const topProductsQuantityQuery = `
@@ -72,12 +68,12 @@ export const getDashboardData = async (req: express.Request, res: express.Respon
             FROM sale_items si
                      JOIN products p ON si.product_id = p.id
                      JOIN sales s ON si.sale_id = s.transaction_id
-            WHERE s.timestamp BETWEEN $1 AND $2 AND s.payment_status = 'paid'
+            WHERE s.timestamp BETWEEN $1 AND $2 AND s.payment_status = 'paid' AND s.store_id = $3
             GROUP BY p.name
             ORDER BY quantity DESC
             LIMIT 10;
         `;
-        const topProductsQuantityResult = await db.query(topProductsQuantityQuery, [startDate, adjustedEndDate]);
+        const topProductsQuantityResult = await db.query(topProductsQuantityQuery, [startDate, adjustedEndDate, storeId]);
 
         // --- Sales by Category ---
         const salesByCategoryQuery = `
@@ -86,11 +82,11 @@ export const getDashboardData = async (req: express.Request, res: express.Respon
                      JOIN products p ON si.product_id = p.id
                      JOIN categories c ON p.category_id = c.id
                      JOIN sales s ON si.sale_id = s.transaction_id
-            WHERE s.timestamp BETWEEN $1 AND $2 AND s.payment_status = 'paid'
+            WHERE s.timestamp BETWEEN $1 AND $2 AND s.payment_status = 'paid' AND s.store_id = $3
             GROUP BY c.name
             ORDER BY revenue DESC;
         `;
-        const salesByCategoryResult = await db.query(salesByCategoryQuery, [startDate, adjustedEndDate]);
+        const salesByCategoryResult = await db.query(salesByCategoryQuery, [startDate, adjustedEndDate, storeId]);
 
         // --- Cashflow from Journal Entries ---
         const cashflowQuery = `
@@ -132,37 +128,37 @@ export const getDashboardData = async (req: express.Request, res: express.Respon
                 COALESCE(SUM(price * stock), 0) as "totalRetailValue",
                 COALESCE(SUM(cost_price * stock), 0) as "totalCostValue",
                 COALESCE(SUM(stock), 0) as "totalUnits"
-            FROM products WHERE status = 'active';
+            FROM products WHERE status = 'active' AND store_id = $1;
         `;
-        const invResult = await db.query(invQuery);
+        const invResult = await db.query(invQuery, [storeId]);
         const invData = invResult.rows[0];
 
         // --- Customer Calculations ---
         const customerQuery = `
             SELECT
-                    (SELECT COUNT(*) FROM customers) as "totalCustomers",
+                    (SELECT COUNT(*) FROM customers WHERE store_id = $1) as "totalCustomers",
                     COALESCE(SUM(account_balance), 0) as "totalStoreCreditOwed"
-            FROM customers
+            FROM customers WHERE store_id = $1
         `;
-        const customerResult = await db.query(customerQuery);
+        const customerResult = await db.query(customerQuery, [storeId]);
         const customerData = customerResult.rows[0];
 
         // --- Active Customers in Period ---
         const activeCustomersQuery = `
             SELECT COUNT(DISTINCT customer_id) as "activeCustomers"
             FROM sales
-            WHERE timestamp BETWEEN $1 AND $2 AND customer_id IS NOT NULL
+            WHERE timestamp BETWEEN $1 AND $2 AND customer_id IS NOT NULL AND store_id = $3
         `;
-        const activeCustomersResult = await db.query(activeCustomersQuery, [startDate, adjustedEndDate]);
+        const activeCustomersResult = await db.query(activeCustomersQuery, [startDate, adjustedEndDate, storeId]);
         const activeCustomers = parseInt(activeCustomersResult.rows[0].activeCustomers, 10);
 
         // --- New Customers in Period ---
         const newCustomersQuery = `
             SELECT COUNT(*) as "newCustomers"
             FROM customers
-            WHERE created_at BETWEEN $1 AND $2
+            WHERE created_at BETWEEN $1 AND $2 AND store_id = $3
         `;
-        const newCustomersResult = await db.query(newCustomersQuery, [startDate, adjustedEndDate]);
+        const newCustomersResult = await db.query(newCustomersQuery, [startDate, adjustedEndDate, storeId]);
         const newCustomers = parseInt(newCustomersResult.rows[0].newCustomers, 10);
 
         // --- Final Report Object ---
@@ -224,6 +220,10 @@ export const getDailySalesWithProducts = async (req: express.Request, res: expre
     const adjustedEndDate = new Date(new Date(endDate).getTime() + 24 * 60 * 60 * 1000 - 1).toISOString();
 
     try {
+        const storeId = (req as any).tenant?.storeId || req.user?.currentStoreId;
+        if (!storeId) {
+            return res.status(400).json({ message: 'Store context required' });
+        }
         const dailyItemsQuery = `
             SELECT
                 DATE(s.timestamp) as date,
@@ -233,11 +233,11 @@ export const getDailySalesWithProducts = async (req: express.Request, res: expre
             FROM sale_items si
             JOIN products p ON si.product_id = p.id
             JOIN sales s ON si.sale_id = s.transaction_id
-            WHERE s.timestamp BETWEEN $1 AND $2 AND s.payment_status = 'paid'
+            WHERE s.timestamp BETWEEN $1 AND $2 AND s.payment_status = 'paid' AND s.store_id = $3
             GROUP BY DATE(s.timestamp), p.name
             ORDER BY DATE(s.timestamp) ASC, revenue DESC;
         `;
-        const result = await db.query(dailyItemsQuery, [startDate, adjustedEndDate]);
+        const result = await db.query(dailyItemsQuery, [startDate, adjustedEndDate, storeId]);
 
         const grouped: Record<string, { date: string; totalRevenue: number; totalQuantity: number; items: { name: string; quantity: number; revenue: number }[] }> = {};
         for (const row of result.rows) {
@@ -270,15 +270,20 @@ export const getPersonalUseAdjustments = async (req: express.Request, res: expre
     const adjustedEndDate = new Date(new Date(endDate).getTime() + 24 * 60 * 60 * 1000 - 1).toISOString();
 
     try {
+        const storeId = (req as any).tenant?.storeId || req.user?.currentStoreId;
+        if (!storeId) {
+            return res.status(400).json({ message: 'Store context required' });
+        }
         const q = `
             SELECT id, "timestamp", user_name, action, details
             FROM audit_logs
             WHERE action = 'Stock Adjusted'
               AND details ILIKE '%Reason: Personal Use%'
-              AND "timestamp" BETWEEN $1 AND $2
+              AND store_id = $1
+              AND "timestamp" BETWEEN $2 AND $3
             ORDER BY "timestamp" DESC;
         `;
-        const result = await db.query(q, [startDate, adjustedEndDate]);
+        const result = await db.query(q, [storeId, startDate, adjustedEndDate]);
 
         const parseEntry = (row: any) => {
             const details: string = row.details || '';

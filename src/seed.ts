@@ -66,27 +66,42 @@ async function seedAdminUser(client: any) {
 }
 
 async function seedSettings(client: any) {
+    // Try to find a store context to seed. Prefer a user's current_store_id.
+    const storeRes = await client.query('SELECT current_store_id AS store_id FROM users WHERE current_store_id IS NOT NULL LIMIT 1');
+    const storeId: string | null = storeRes.rows?.[0]?.store_id || null;
+    if (!storeId) {
+        console.log('ℹ️ No store_id found to seed store_settings; skipping.');
+        return;
+    }
     const query = `
-        INSERT INTO store_settings (id, name, address, phone, email, website, tax_rate, currency, receipt_message, low_stock_threshold, sku_prefix, enable_store_credit, payment_methods, supplier_payment_methods)
-        VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-        ON CONFLICT (id) DO NOTHING;
+        INSERT INTO store_settings (store_id, name, address, phone, email, website, tax_rate, currency, receipt_message, low_stock_threshold, sku_prefix, enable_store_credit, payment_methods, supplier_payment_methods)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        ON CONFLICT (store_id) DO NOTHING;
     `;
-     await client.query(query, [
+    await client.query(query, [
+        storeId,
         defaultSettings.name, defaultSettings.address, defaultSettings.phone, defaultSettings.email, defaultSettings.website,
         defaultSettings.taxRate, JSON.stringify(defaultSettings.currency), defaultSettings.receiptMessage, defaultSettings.lowStockThreshold,
         defaultSettings.skuPrefix, defaultSettings.enableStoreCredit, JSON.stringify(defaultSettings.paymentMethods), JSON.stringify(defaultSettings.supplierPaymentMethods)
     ]);
-    console.log('✅ Default store settings seeded.');
+    console.log('✅ Default store settings seeded for store:', storeId);
 }
 
 async function seedAccounts(client: any) {
+    // Prefer a specific store context. If none available, skip (runtime will auto-create per store).
+    const storeRes = await client.query('SELECT current_store_id AS store_id FROM users WHERE current_store_id IS NOT NULL LIMIT 1');
+    const storeId: string | null = storeRes.rows?.[0]?.store_id || null;
+    if (!storeId) {
+        console.log('ℹ️ No store_id found to seed accounts; runtime will auto-create when needed.');
+        return;
+    }
     for (const acc of initialAccounts) {
         await client.query(
-            'INSERT INTO accounts (id, name, number, type, sub_type, is_debit_normal, description, balance) VALUES ($1, $2, $3, $4, $5, $6, $7, 0) ON CONFLICT(number) DO NOTHING',
-            [generateId('acc'), acc.name, acc.number, acc.type, acc.subType, acc.isDebitNormal, acc.description]
+            'INSERT INTO accounts (id, name, number, type, sub_type, is_debit_normal, description, balance, store_id) VALUES ($1, $2, $3, $4, $5, $6, $7, 0, $8) ON CONFLICT (store_id, number) DO NOTHING',
+            [generateId('acc'), acc.name, acc.number, acc.type, acc.subType, acc.isDebitNormal, acc.description, storeId]
         );
     }
-    console.log('✅ Chart of Accounts seeded.');
+    console.log('✅ Chart of Accounts seeded for store:', storeId);
 }
 
 async function seedInitialData(client: any) {

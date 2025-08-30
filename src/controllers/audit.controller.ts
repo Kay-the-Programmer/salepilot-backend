@@ -5,9 +5,18 @@ import { toCamelCase } from '../utils/helpers';
 export const getAuditLogs = async (req: express.Request, res: express.Response) => {
     const { userId, action, startDate, endDate } = req.query as { [key: string]: string };
 
+    const storeId = (req as any).tenant?.storeId || req.user?.currentStoreId;
+    if (!storeId) {
+        return res.status(400).json({ message: 'Store context required' });
+    }
+
     let query = 'SELECT * FROM audit_logs';
-    const params = [];
-    const whereClauses = [];
+    const params: any[] = [];
+    const whereClauses: string[] = [];
+
+    // Enforce store isolation
+    params.push(storeId);
+    whereClauses.push(`store_id = $${params.length}`);
 
     if (userId) {
         params.push(userId);

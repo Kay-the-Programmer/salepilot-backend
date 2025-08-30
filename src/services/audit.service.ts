@@ -9,9 +9,10 @@ export const auditService = {
         const dbClient = client || db;
         const id = generateId('log');
         
+        const storeId = user.currentStoreId || (undefined as any);
         await dbClient.query(
-            'INSERT INTO audit_logs (id, "timestamp", user_id, user_name, action, details) VALUES ($1, $2, $3, $4, $5, $6)',
-            [id, new Date().toISOString(), user.id, user.name, action, details]
+            'INSERT INTO audit_logs (id, "timestamp", user_id, user_name, action, details, store_id) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+            [id, new Date().toISOString(), user.id, user.name, action, details, storeId]
         );
     }
 };

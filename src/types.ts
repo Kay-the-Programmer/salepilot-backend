@@ -27,7 +27,8 @@ export interface User {
   id: string;
   name: string;
   email: string;
-  role: 'admin' | 'staff' | 'inventory_manager';
+  role: 'superadmin' | 'admin' | 'staff' | 'inventory_manager';
+  currentStoreId?: string; // Multi-tenant: currently selected store ID
 }
 
 export interface CartItem {
@@ -274,4 +275,5 @@ export interface AuditLog {
   userName: string;
   action: string;
   details: string; // e.g., "Product: 'Coffee Mug' (SKU: 12345)"
+  storeId?: string; // tenant scope
 }

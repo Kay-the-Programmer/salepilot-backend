@@ -31,6 +31,7 @@ export const loginUser = async (req: express.Request, res: express.Response) => 
                 name: user.name,
                 email: user.email,
                 role: user.role,
+                current_store_id: user.current_store_id,
                 token: generateToken(user.id),
             });
             return res.json(userResponse);

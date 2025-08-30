@@ -9,7 +9,9 @@ import { accountingService } from '../services/accounting.service';
 // --- Chart of Accounts ---
 export const getAccounts = async (req: express.Request, res: express.Response) => {
     try {
-        const result = await db.query('SELECT * FROM accounts ORDER BY number');
+        const storeId = (req as any).tenant?.storeId;
+        if (!storeId) return res.status(400).json({ message: 'No active store selected.' });
+        const result = await db.query('SELECT * FROM accounts WHERE store_id = $1 ORDER BY number', [storeId]);
         res.status(200).json(toCamelCase(result.rows));
     } catch (error) {
         res.status(500).json({ message: 'Error fetching accounts' });
@@ -20,9 +22,11 @@ export const createAccount = async (req: express.Request, res: express.Response)
     const id = generateId('acc');
     const isDebitNormal = type === 'asset' || type === 'expense';
     try {
+        const storeId = (req as any).tenant?.storeId;
+        if (!storeId) return res.status(400).json({ message: 'No active store selected.' });
         const result = await db.query(
-            'INSERT INTO accounts (id, name, number, type, is_debit_normal, description, balance) VALUES ($1, $2, $3, $4, $5, $6, 0) RETURNING *',
-            [id, name, number, type, isDebitNormal, description]
+            'INSERT INTO accounts (id, name, number, type, is_debit_normal, description, balance, store_id) VALUES ($1, $2, $3, $4, $5, $6, 0, $7) RETURNING *',
+            [id, name, number, type, isDebitNormal, description, storeId]
         );
         auditService.log(req.user!, 'Account Created', `Account: ${name} (${number})`);
         res.status(201).json(toCamelCase(result.rows[0]));
@@ -34,9 +38,11 @@ export const updateAccount = async (req: express.Request, res: express.Response)
     const { id } = req.params;
     const { name, number, type, description } = req.body;
     try {
+        const storeId = (req as any).tenant?.storeId;
+        if (!storeId) return res.status(400).json({ message: 'No active store selected.' });
         const result = await db.query(
-            'UPDATE accounts SET name=$1, number=$2, type=$3, description=$4 WHERE id=$5 RETURNING *',
-            [name, number, type, description, id]
+            'UPDATE accounts SET name=$1, number=$2, type=$3, description=$4 WHERE id=$5 AND store_id=$6 RETURNING *',
+            [name, number, type, description, id, storeId]
         );
         if (result.rowCount === 0) return res.status(404).json({ message: 'Account not found' });
         auditService.log(req.user!, 'Account Updated', `Account: ${name} (${number})`);
@@ -48,7 +54,9 @@ export const updateAccount = async (req: express.Request, res: express.Response)
 export const deleteAccount = async (req: express.Request, res: express.Response) => {
     const { id } = req.params;
     try {
-        const result = await db.query('DELETE FROM accounts WHERE id=$1 RETURNING name, number', [id]);
+        const storeId = (req as any).tenant?.storeId;
+        if (!storeId) return res.status(400).json({ message: 'No active store selected.' });
+        const result = await db.query('DELETE FROM accounts WHERE id=$1 AND store_id=$2 RETURNING name, number', [id, storeId]);
         if (result.rowCount === 0) return res.status(404).json({ message: 'Account not found' });
         auditService.log(req.user!, 'Account Deleted', `Account: ${result.rows[0].name} (${result.rows[0].number})`);
         res.status(200).json({ message: 'Account deleted' });
@@ -60,13 +68,16 @@ export const deleteAccount = async (req: express.Request, res: express.Response)
 // --- Journal Entries ---
 export const getJournalEntries = async (req: express.Request, res: express.Response) => {
     try {
+        const storeId = (req as any).tenant?.storeId;
+        if (!storeId) return res.status(400).json({ message: 'No active store selected.' });
         const result = await db.query(`
             SELECT je.*, COALESCE(json_agg(jel.*) FILTER (WHERE jel.id IS NOT NULL), '[]') as lines
             FROM journal_entries je
-                     LEFT JOIN journal_entry_lines jel ON je.id = jel.journal_entry_id
+            LEFT JOIN journal_entry_lines jel ON je.id = jel.journal_entry_id AND jel.store_id = $1
+            WHERE je.store_id = $1
             GROUP BY je.id, je.date
             ORDER BY je.date DESC
-        `);
+        `, [storeId]);
         res.status(200).json(toCamelCase(result.rows));
     } catch (error) {
         res.status(500).json({ message: 'Error fetching journal entries' });
@@ -82,13 +93,15 @@ export const createManualJournalEntry = async (req: express.Request, res: expres
 
     try {
         // This should be a transaction
+        const storeId = (req as any).tenant?.storeId;
+        if (!storeId) return res.status(400).json({ message: 'No active store selected.' });
         const entryId = generateId('je');
-        await db.query('INSERT INTO journal_entries (id, date, description, source_type, source_id) VALUES ($1, $2, $3, $4, $5)',
-            [entryId, entryData.date, entryData.description, 'manual', null]
+        await db.query('INSERT INTO journal_entries (id, date, description, source_type, source_id, store_id) VALUES ($1, $2, $3, $4, $5, $6)',
+            [entryId, entryData.date, entryData.description, 'manual', null, storeId]
         );
         for (const line of entryData.lines) {
-            await db.query('INSERT INTO journal_entry_lines (journal_entry_id, account_id, type, amount, account_name) VALUES ($1, $2, $3, $4, $5)',
-                [entryId, line.accountId, line.type, line.amount, line.accountName]
+            await db.query('INSERT INTO journal_entry_lines (journal_entry_id, account_id, type, amount, account_name, store_id) VALUES ($1, $2, $3, $4, $5, $6)',
+                [entryId, line.accountId, line.type, line.amount, line.accountName, storeId]
             );
         }
 
@@ -102,13 +115,16 @@ export const createManualJournalEntry = async (req: express.Request, res: expres
 // --- Supplier Invoices ---
 export const getSupplierInvoices = async (req: express.Request, res: express.Response) => {
     try {
+        const storeId = (req as any).tenant?.storeId;
+        if (!storeId) return res.status(400).json({ message: 'No active store selected.' });
         const result = await db.query(`
             SELECT si.*, COALESCE(json_agg(sp.*) FILTER (WHERE sp.id IS NOT NULL), '[]') as payments
             FROM supplier_invoices si
-                     LEFT JOIN supplier_payments sp ON si.id = sp.supplier_invoice_id
+            LEFT JOIN supplier_payments sp ON si.id = sp.supplier_invoice_id AND sp.store_id = $1
+            WHERE si.store_id = $1
             GROUP BY si.id, si.invoice_date
             ORDER BY si.invoice_date DESC
-        `);
+        `, [storeId]);
         res.status(200).json(toCamelCase(result.rows));
     } catch (error) {
         res.status(500).json({ message: 'Error fetching supplier invoices' });
@@ -118,9 +134,11 @@ export const createSupplierInvoice = async (req: express.Request, res: express.R
     const { invoiceNumber, supplierId, supplierName, purchaseOrderId, poNumber, invoiceDate, dueDate, amount } = req.body;
     const id = generateId('inv-sup');
     try {
+        const storeId = (req as any).tenant?.storeId;
+        if (!storeId) return res.status(400).json({ message: 'No active store selected.' });
         const result = await db.query(
-            'INSERT INTO supplier_invoices (id, invoice_number, supplier_id, supplier_name, purchase_order_id, po_number, invoice_date, due_date, amount, amount_paid, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, \'unpaid\') RETURNING *',
-            [id, invoiceNumber, supplierId, supplierName, purchaseOrderId, poNumber, invoiceDate, dueDate, amount]
+            'INSERT INTO supplier_invoices (id, invoice_number, supplier_id, supplier_name, purchase_order_id, po_number, invoice_date, due_date, amount, amount_paid, status, store_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, \'unpaid\', $10) RETURNING *',
+            [id, invoiceNumber, supplierId, supplierName, purchaseOrderId, poNumber, invoiceDate, dueDate, amount, storeId]
         );
         auditService.log(req.user!, 'Supplier Invoice Created', `Invoice #: ${invoiceNumber} for ${supplierName}`);
         res.status(201).json(toCamelCase(result.rows[0]));
@@ -132,9 +150,11 @@ export const updateSupplierInvoice = async (req: express.Request, res: express.R
     const { id } = req.params;
     const { invoiceNumber, supplierId, supplierName, purchaseOrderId, poNumber, invoiceDate, dueDate, amount } = req.body;
     try {
+        const storeId = (req as any).tenant?.storeId;
+        if (!storeId) return res.status(400).json({ message: 'No active store selected.' });
         const result = await db.query(
-            'UPDATE supplier_invoices SET invoice_number=$1, supplier_id=$2, supplier_name=$3, purchase_order_id=$4, po_number=$5, invoice_date=$6, due_date=$7, amount=$8 WHERE id=$9 RETURNING *',
-            [invoiceNumber, supplierId, supplierName, purchaseOrderId, poNumber, invoiceDate, dueDate, amount, id]
+            'UPDATE supplier_invoices SET invoice_number=$1, supplier_id=$2, supplier_name=$3, purchase_order_id=$4, po_number=$5, invoice_date=$6, due_date=$7, amount=$8 WHERE id=$9 AND store_id=$10 RETURNING *',
+            [invoiceNumber, supplierId, supplierName, purchaseOrderId, poNumber, invoiceDate, dueDate, amount, id, storeId]
         );
         if(result.rowCount === 0) return res.status(404).json({ message: 'Invoice not found' });
         auditService.log(req.user!, 'Supplier Invoice Updated', `Invoice #: ${invoiceNumber}`);
