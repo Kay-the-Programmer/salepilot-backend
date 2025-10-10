@@ -4,6 +4,25 @@ import { generateId } from '../utils/helpers';
 
 type DBClient = { query: (text: string, params?: any[]) => Promise<any> };
 
+// Helper to safely derive a customer display name within the current store
+const getCustomerDisplayName = async (sale: Sale, storeId: string, client: DBClient): Promise<string> => {
+    const explicitName = (sale as any).customerName || sale.customerName;
+    if (explicitName && explicitName !== 'undefined' && explicitName !== 'null') {
+        return String(explicitName);
+    }
+    const customerId = (sale as any).customer_id || sale.customerId;
+    if (customerId) {
+        try {
+            const result = await client.query('SELECT name FROM customers WHERE id = $1 AND store_id = $2', [customerId, storeId]);
+            const name = result.rows?.[0]?.name;
+            if (name && name !== 'undefined' && name !== 'null') return String(name);
+        } catch (e) {
+            console.warn('getCustomerDisplayName: lookup failed', e);
+        }
+    }
+    return 'Customer';
+};
+
 // Ensures core system accounts exist for the given store. Idempotent.
 const ensureCoreAccounts = async (storeId: string, client?: DBClient) => {
     const dbClient = client || db;
@@ -170,10 +189,12 @@ const recordSale = async (sale: Sale, client?: DBClient, storeIdParam?: string) 
         journalLines.push({ accountId: account.id, accountName: account.name, type: 'debit', amount: amount });
     });
 
+    const customerDisplayName = await getCustomerDisplayName(sale, storeId, dbClient);
+    const saleId = (sale as any).transactionId || (sale as any).transaction_id || (sale as any).id;
     await addJournalEntry({
         date: sale.timestamp,
-        description: `Sale to ${sale.customerName || 'customer'} - ID ${sale.transactionId}`,
-        source: { type: 'sale', id: sale.transactionId },
+        description: `Sale to ${customerDisplayName} - ID ${saleId}`,
+        source: { type: 'sale', id: saleId },
         lines: journalLines.filter(line => line.amount > 0.001)
     }, storeId, dbClient);
 };
@@ -286,10 +307,11 @@ const recordCustomerPayment = async (sale: Sale, payment: Payment, client?: DBCl
         return;
     }
 
+    const customerDisplayName = await getCustomerDisplayName(sale, storeId, dbClient);
     await addJournalEntry({
         date: payment.date,
-        description: `Payment for Invoice ${sale.transactionId}`,
-        source: { type: 'payment', id: sale.transactionId },
+        description: `Customer payment from ${customerDisplayName} for Invoice ${(sale as any).transactionId || (sale as any).transaction_id || (sale as any).id}`,
+        source: { type: 'payment', id: (sale as any).transactionId || (sale as any).transaction_id || (sale as any).id },
         lines: [
             { accountId: cashAccount.id, accountName: cashAccount.name, type: 'debit', amount: payment.amount },
             { accountId: arAccount.id, accountName: arAccount.name, type: 'credit', amount: payment.amount },

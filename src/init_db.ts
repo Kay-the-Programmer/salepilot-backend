@@ -674,7 +674,7 @@ async function initializeDatabase() {
                     `INSERT INTO products (id, name, description, sku, barcode, category_id, supplier_id, price, cost_price, stock, image_urls, brand, status)
                      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
                      ON CONFLICT (sku) DO NOTHING`,
-                    [genId('prod'), p.name, p.description, p.sku, p.barcode, p.category ? categoryIds[p.category] : null, p.supplier ? supplierIds[p.supplier!] : null, p.price, p.cost, p.stock, JSON.stringify(['/images/salepilot.png']), p.brand, p.status]
+                    [genId('prod'), p.name, p.description, p.sku, p.barcode, p.category ? categoryIds[p.category] : null, p.supplier ? supplierIds[p.supplier!] : null, p.price, p.cost, p.stock, ['/images/salepilot.png'], p.brand, p.status]
                 );
             }
         }

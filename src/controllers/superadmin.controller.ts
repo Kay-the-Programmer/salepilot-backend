@@ -85,6 +85,23 @@ export const createNotification = async (req: express.Request, res: express.Resp
   }
 };
 
+export const listNotifications = async (req: express.Request, res: express.Response) => {
+  try {
+    const rows = await db.query(`
+      SELECT n.id, n.title, n.message, n.created_at, n.created_by,
+             u.name as created_by_name, u.email as created_by_email
+      FROM system_notifications n
+      LEFT JOIN users u ON u.id = n.created_by
+      ORDER BY n.created_at DESC
+      LIMIT 200
+    `);
+    return res.status(200).json(toCamelCase({ notifications: rows.rows }));
+  } catch (e) {
+    console.error('Error listing notifications', e);
+    return res.status(500).json({ message: 'Error listing notifications' });
+  }
+};
+
 export const listRevenueSummary = async (req: express.Request, res: express.Response) => {
   try {
     const totalRes = await db.query(`SELECT COALESCE(SUM(amount),0) as total_amount, COUNT(*) as count FROM subscription_payments`);

@@ -97,11 +97,11 @@ export const getDashboardData = async (req: express.Request, res: express.Respon
             FROM journal_entries je
                      JOIN journal_entry_lines jel ON je.id = jel.journal_entry_id
                      JOIN accounts a ON jel.account_id = a.id
-            WHERE je.date BETWEEN $1 AND $2 AND a.sub_type IN ('cash', 'accounts_receivable')
+            WHERE je.date BETWEEN $1 AND $2 AND a.sub_type IN ('cash', 'accounts_receivable') AND je.store_id = $3
             GROUP BY DATE(je.date)
             ORDER BY date ASC;
         `;
-        const cashflowResult = await db.query(cashflowQuery, [startDate, adjustedEndDate]);
+        const cashflowResult = await db.query(cashflowQuery, [startDate, adjustedEndDate, storeId]);
 
         const cashflowTrend = cashflowResult.rows.reduce((acc, row) => {
             const dateStr = new Date(row.date).toISOString().split('T')[0];

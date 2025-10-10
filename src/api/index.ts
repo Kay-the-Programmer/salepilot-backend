@@ -40,7 +40,29 @@ router.use('/stores', storeRoutes);
 router.use('/superadmin', superadminRoutes);
 
 
-// A simple health check endpoint
+/**
+ * @swagger
+ * /api/health:
+ *   get:
+ *     summary: Health check endpoint
+ *     description: Returns the current status and timestamp of the API
+ *     tags: [Health]
+ *     responses:
+ *       200:
+ *         description: API is running successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: OK
+ *                 timestamp:
+ *                   type: string
+ *                   format: date-time
+ *                   example: 2023-10-09T18:44:00.000Z
+ */
 router.get('/health', (req, res) => {
     res.status(200).json({ status: 'OK', timestamp: new Date().toISOString() });
 });

@@ -13,48 +13,23 @@ const processImageUrls = (files: Express.Multer.File[], existingImages: string[]
     return [...existingImages, ...uploadedImageUrls];
 };
 
-// Helper function to process base64 images
-const processBase64Images = async (base64Images: string[]): Promise<string[]> => {
-    const imageUrls: string[] = [];
-
-    for (let i = 0; i < base64Images.length; i++) {
-        const base64Image = base64Images[i];
-        if (!base64Image.startsWith('data:image')) continue;
-
-        try {
-            // Extract mime type and base64 data
-            const matches = base64Image.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
-            if (!matches || matches.length !== 3) continue;
-
-            const mimeType = matches[1];
-            const base64Data = matches[2];
-            const extension = mimeType.split('/')[1] || 'png';
-
-            // Create a buffer from the base64 data
-            const buffer = Buffer.from(base64Data, 'base64');
-
-            // Create a unique filename
-            const filename = `product-${Date.now()}-${i}.${extension}`;
-
-            // Ensure the uploads directory exists
-            const uploadsDir = path.join(__dirname, '../../uploads/products');
-            if (!fs.existsSync(uploadsDir)) {
-                fs.mkdirSync(uploadsDir, { recursive: true });
-            }
-
-            // Write the file
-            const filePath = path.join(uploadsDir, filename);
-            fs.writeFileSync(filePath, buffer);
-
-            // Add the URL to the array
-            imageUrls.push(`/uploads/products/${filename}`);
-        } catch (error) {
-            console.error('Error processing base64 image:', error);
+// Normalize URLs to relative product upload path and de-duplicate by basename
+const normalizeAndDedupeUrls = (urls: string[]): string[] => {
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const u of urls) {
+        if (!u || typeof u !== 'string') continue;
+        // Extract filename and enforce relative path
+        const filename = path.basename(u);
+        const normalized = `/uploads/products/${filename}`;
+        if (!seen.has(normalized)) {
+            seen.add(normalized);
+            result.push(normalized);
         }
     }
-
-    return imageUrls;
+    return result;
 };
+
 
 // Helper function to delete old image files
 const deleteImageFiles = (imageUrls: string[]) => {
@@ -83,7 +58,8 @@ export const getProducts = async (req: express.Request, res: express.Response) =
         if (name) { params.push(`%${name}%`); where.push(`LOWER(name) LIKE LOWER($${params.length})`); }
         if (sku) { params.push(`%${sku}%`); where.push(`LOWER(sku) LIKE LOWER($${params.length})`); }
         if (categoryId) { params.push(categoryId); where.push(`category_id = $${params.length}`); }
-        if (supplierId) { params.push(supplierId); where.push(`supplier_id = $${params.length}`); }
+        if (supplierId) { params.push(supplierId); where.push(`supplier_id = $${params.length})`); } // ... existing code ...
+
         if (stockStatus) {
             const ss = String(stockStatus).toLowerCase();
             if (ss === 'out_of_stock') {
@@ -147,26 +123,46 @@ export const createProduct = async (req: express.Request, res: express.Response)
             });
         }
 
-        // Process existing images (should be empty for new products)
-        let existingImageUrls: string[] = [];
-        if (existing_images) {
-            try {
-                existingImageUrls = JSON.parse(existing_images);
-            } catch (e) {
-                console.error('Error parsing existing_images:', e);
-                existingImageUrls = [];
+        if (barcode && String(barcode).trim()) {
+            const dupCheck = await db.query(
+                'SELECT 1 FROM products WHERE store_id = $1 AND barcode = $2 LIMIT 1',
+                [storeId, String(barcode).trim()]
+            );
+            if (dupCheck.rowCount > 0) {
+                return res.status(409).json({ message: 'A product with this barcode already exists in this store.' });
+            }
+        }
+        if (sku && String(sku).trim()) {
+            const dupCheckSku = await db.query(
+                'SELECT 1 FROM products WHERE store_id = $1 AND sku = $2 LIMIT 1',
+                [storeId, String(sku).trim()]
+            );
+            if (dupCheckSku.rowCount > 0) {
+                return res.status(409).json({ message: 'A product with this SKU already exists in this store. Please use a unique SKU.' });
             }
         }
 
-        // Separate base64 images from regular URLs
-        const base64Images = existingImageUrls.filter(url => url.startsWith('data:image'));
-        const regularUrls = existingImageUrls.filter(url => !url.startsWith('data:image'));
 
-        // Process base64 images
-        const processedBase64Urls = await processBase64Images(base64Images);
-
-        // Combine all image URLs
-        const allImageUrls = processImageUrls(files || [], [...regularUrls, ...processedBase64Urls]);
+        // Build image URLs. If files are uploaded via multipart, ignore existing_images to avoid duplicates.
+        let allImageUrls: string[] = [];
+        if (files && files.length > 0) {
+            allImageUrls = processImageUrls(files, []);
+        } else {
+            // Process existing images, ignoring base64 data URLs (only keep regular URLs)
+            let existingImageUrls: string[] = [];
+            if (existing_images) {
+                try {
+                    existingImageUrls = JSON.parse(existing_images);
+                } catch (e) {
+                    console.error('Error parsing existing_images:', e);
+                    existingImageUrls = [];
+                }
+            }
+            const regularUrls = existingImageUrls.filter((url: string) => typeof url === 'string' && !url.startsWith('data:image'));
+            allImageUrls = [...regularUrls];
+        }
+        // De-duplicate to guarantee only one URL per uploaded image (normalize to avoid host/relative duplicates)
+        allImageUrls = normalizeAndDedupeUrls(allImageUrls);
 
         // Handle null/undefined values properly with better validation
         const processedValues = {
@@ -210,8 +206,16 @@ export const createProduct = async (req: express.Request, res: express.Response)
         }
 
         const queryText = `
-            INSERT INTO products(id, name, description, sku, barcode, category_id, supplier_id, price, cost_price, stock, unit_of_measure, image_urls, brand, status, reorder_point, weight, dimensions, safety_stock, variants, custom_attributes, store_id)
-            VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+            INSERT INTO products(
+                id, name, description, sku, barcode, category_id, supplier_id, price, cost_price, stock,
+                unit_of_measure, image_urls, brand, status, reorder_point, weight, dimensions, safety_stock,
+                variants, custom_attributes, store_id
+            )
+            VALUES(
+                      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+                      $11,$12,$13,$14,$15,$16,$17,$18,
+                      $19,$20,$21
+                  )
             RETURNING *;
         `;
         const values = [
@@ -238,6 +242,8 @@ export const createProduct = async (req: express.Request, res: express.Response)
             storeId
         ];
 
+
+
         console.log('Executing query with values:', values);
 
         const result = await db.query(queryText, values);
@@ -245,31 +251,25 @@ export const createProduct = async (req: express.Request, res: express.Response)
         await auditService.log(req.user!, 'Product Created', `Product: "${createdProduct.name}" (SKU: ${createdProduct.sku})`);
         res.status(201).json(toCamelCase(createdProduct));
     } catch (error) {
-        // If database operation fails, clean up uploaded files
         const files = req.files as Express.Multer.File[];
         if (files && files.length > 0) {
             deleteImageFiles(files.map(file => `/uploads/products/${file.filename}`));
         }
 
-        // Handle known DB errors more gracefully
         const pgErr = error as any;
-        if (pgErr && pgErr.code === '23505') { // unique_violation
+        if (pgErr && pgErr.code === '23505') {
             const constraint: string = pgErr.constraint || '';
+            // Make messages store-scoped
             if (constraint.includes('sku')) {
-                return res.status(409).json({ message: 'A product with this SKU already exists. Please use a unique SKU.' });
+                return res.status(409).json({ message: 'A product with this SKU already exists in this store. Please use a unique SKU.' });
             }
             if (constraint.includes('barcode')) {
-                return res.status(409).json({ message: 'A product with this barcode already exists.' });
+                return res.status(409).json({ message: 'A product with this barcode already exists in this store.' });
             }
             return res.status(409).json({ message: 'Duplicate value violates a unique constraint.' });
         }
 
         console.error('Error creating product:', error);
-        console.error('Error details:', {
-            message: (error as Error).message,
-            stack: (error as Error).stack,
-            requestBody: req.body
-        });
         res.status(500).json({
             message: 'Error creating product',
             error: process.env.NODE_ENV === 'development' ? (error as Error).message : 'Internal server error'
@@ -313,10 +313,31 @@ export const updateProduct = async (req: express.Request, res: express.Response)
         if (!storeId) {
             return res.status(400).json({ message: 'Store context required' });
         }
+
+        // Optional: pre-check uniqueness scoped to store, excluding current product
+        if (barcode && String(barcode).trim()) {
+            const dupCheck = await db.query(
+                'SELECT 1 FROM products WHERE store_id = $1 AND barcode = $2 AND id <> $3 LIMIT 1',
+                [storeId, String(barcode).trim(), id]
+            );
+            if (dupCheck.rowCount > 0) {
+                return res.status(409).json({ message: 'A product with this barcode already exists in this store.' });
+            }
+        }
+        if (sku && String(sku).trim()) {
+            const dupCheckSku = await db.query(
+                'SELECT 1 FROM products WHERE store_id = $1 AND sku = $2 AND id <> $3 LIMIT 1',
+                [storeId, String(sku).trim(), id]
+            );
+            if (dupCheckSku.rowCount > 0) {
+                return res.status(409).json({ message: 'A product with this SKU already exists in this store. Please use a unique SKU.' });
+            }
+        }
+
         const currentProductResult = await db.query('SELECT image_urls FROM products WHERE id = $1 AND store_id = $2', [id, storeId]);
         if (currentProductResult.rowCount === 0) {
-            if (files.length > 0) {
-                deleteImageFiles(files.map(file => `/uploads/products/${file.filename}`));
+            if ((req.files as Express.Multer.File[])?.length > 0) {
+                deleteImageFiles((req.files as Express.Multer.File[]).map(file => `/uploads/products/${file.filename}`));
             }
             return res.status(404).json({ message: 'Product not found' });
         }
@@ -355,10 +376,9 @@ export const updateProduct = async (req: express.Request, res: express.Response)
                 } catch (e) { console.error('Error parsing images_to_delete:', e); }
             }
 
-            const base64Images = existingImageUrls.filter(url => url.startsWith('data:image'));
             const regularUrls = existingImageUrls.filter(url => !url.startsWith('data:image'));
-            const processedBase64Urls = await processBase64Images(base64Images);
-            finalImageUrls = processImageUrls(files, [...regularUrls, ...processedBase64Urls]);
+            finalImageUrls = processImageUrls(files, [...regularUrls]);
+            finalImageUrls = normalizeAndDedupeUrls(finalImageUrls);
         }
 
         let customAttributesObj = {};
@@ -411,17 +431,18 @@ export const updateProduct = async (req: express.Request, res: express.Response)
         res.status(200).json(toCamelCase(updatedProduct));
 
     } catch (error) {
+        const files = (req.files as Express.Multer.File[]) || [];
         if (files.length > 0) {
             deleteImageFiles(files.map(file => `/uploads/products/${file.filename}`));
         }
         const pgErr = error as any;
-        if (pgErr && pgErr.code === '23505') { // unique_violation
+        if (pgErr && pgErr.code === '23505') {
             const constraint: string = pgErr.constraint || '';
             if (constraint.includes('sku')) {
-                return res.status(409).json({ message: 'A product with this SKU already exists. Please use a unique SKU.' });
+                return res.status(409).json({ message: 'A product with this SKU already exists in this store. Please use a unique SKU.' });
             }
             if (constraint.includes('barcode')) {
-                return res.status(409).json({ message: 'A product with this barcode already exists.' });
+                return res.status(409).json({ message: 'A product with this barcode already exists in this store.' });
             }
             return res.status(409).json({ message: 'Duplicate value violates a unique constraint.' });
         }
@@ -429,40 +450,6 @@ export const updateProduct = async (req: express.Request, res: express.Response)
         res.status(500).json({ message: 'Error updating product', error: (error as Error).message });
     }
 };
-// ... rest of your existing controller functions
-// export const updateProduct = async (req: express.Request, res: express.Response) => {
-//     const { id } = req.params;
-//     const {
-//         name, description, sku, barcode, categoryId, supplierId, price, costPrice, stock, imageUrls,
-//         brand, status, reorderPoint, customAttributes
-//     } = req.body;
-//
-//     const queryText = `
-//         UPDATE products
-//         SET name = $1, description = $2, sku = $3, barcode = $4, category_id = $5, supplier_id = $6, price = $7,
-//             cost_price = $8, stock = $9, image_urls = $10, brand = $11, status = $12, reorder_point = $13,
-//             custom_attributes = $14
-//         WHERE id = $15
-//         RETURNING *;
-//     `;
-//     const values = [
-//         name, description, sku, barcode, categoryId, supplierId, price, costPrice, stock, imageUrls,
-//         brand, status, reorderPoint, customAttributes, id
-//     ];
-//
-//     try {
-//         const result = await db.query(queryText, values);
-//         if (result.rowCount === 0) {
-//             return res.status(404).json({ message: 'Product not found' });
-//         }
-//         const updatedProduct = result.rows[0];
-//         await auditService.log(req.user!, 'Product Updated', `Product: "${updatedProduct.name}" (ID: ${updatedProduct.id})`);
-//         res.status(200).json(toCamelCase(updatedProduct));
-//     } catch (error) {
-//         console.error(`Error updating product ${id}:`, error);
-//         res.status(500).json({ message: 'Error updating product' });
-//     }
-// };
 
 export const deleteProduct = async (req: express.Request, res: express.Response) => {
     const { id } = req.params;

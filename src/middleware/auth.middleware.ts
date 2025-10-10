@@ -105,6 +105,23 @@ export const superAdminOnly = (req: express.Request, res: express.Response, next
     }
 };
 
+// Ensures tenant context is present for store-scoped admin routes
+export const attachTenant = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    try {
+        const headers = req.headers as Record<string, string | undefined>;
+        const headerStore = (headers['x-tenant-id'] as string) || (headers['x-store-id'] as string);
+        const userStore = (req.user as any)?.currentStoreId || (req.user as any)?.current_store_id;
+        const storeId = headerStore || userStore;
+        if (!storeId) {
+            return res.status(400).json({ message: 'No store selected. Please select a store first.' });
+        }
+        (req as any).tenant = { storeId };
+        return next();
+    } catch (e) {
+        return res.status(400).json({ message: 'Invalid tenant context' });
+    }
+};
+
 export const canManageInventory = (req: express.Request, res: express.Response, next: express.NextFunction) => {
      if (req.user && (req.user.role === 'admin' || req.user.role === 'inventory_manager')) {
         next();

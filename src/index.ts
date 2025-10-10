@@ -1,6 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import swaggerUi from 'swagger-ui-express';
+import swaggerSpecs from './swagger.config';
 import apiRoutes from './api';
 import { errorMiddleware } from './middleware/error.middleware';
 import './types/request';
@@ -19,6 +21,7 @@ const allowedOrigins: (string | RegExp)[] = [
   /https?:\/\/.+\.onrender\.com$/,
   'http://localhost:5173',
   'http://localhost:3000',
+  'http://192.168.1.101:5173',
 ].filter(Boolean) as (string | RegExp)[];
 
 const corsOptions: cors.CorsOptions = {
@@ -31,7 +34,8 @@ const corsOptions: cors.CorsOptions = {
     return callback(new Error(`CORS: Origin ${origin} not allowed`), false);
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Store-Id', 'X-Tenant-Id', 'x-store-id', 'x-tenant-id'],
+  // Include both canonical and lowercase forms for robustness across environments
   credentials: true,
 };
 app.use(cors(corsOptions));
@@ -42,9 +46,16 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 // --- API Routes ---
 app.use('/api', apiRoutes);
 
+// --- Swagger Documentation ---
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpecs, {
+  explorer: true,
+  customCss: '.swagger-ui .topbar { display: none }',
+  customSiteTitle: 'SalePilot API Documentation'
+}));
+
 // --- Basic Route ---
 app.get('/', (req: express.Request, res: express.Response) => {
-  res.send('SalePilot Backend is running!');
+  res.send('SalePilot Backend is running! API Documentation available at <a href="/api-docs">/api-docs</a>');
 });
 
 

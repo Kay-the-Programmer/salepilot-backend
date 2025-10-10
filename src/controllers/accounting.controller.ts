@@ -167,7 +167,11 @@ export const recordSupplierPayment = async (req: express.Request, res: express.R
     const { id: invoiceId } = req.params;
     const paymentData: Omit<SupplierPayment, 'id'> = req.body;
     try {
-        const invoiceRes = await db.query('SELECT amount, amount_paid FROM supplier_invoices WHERE id = $1', [invoiceId]);
+        const storeId = (req as any).tenant?.storeId;
+        if (!storeId) return res.status(400).json({ message: 'No active store selected.' });
+
+        // Fetch invoice scoped to tenant
+        const invoiceRes = await db.query('SELECT amount, amount_paid FROM supplier_invoices WHERE id = $1 AND store_id = $2', [invoiceId, storeId]);
         if (invoiceRes.rowCount === 0) return res.status(404).json({ message: 'Invoice not found' });
 
         const invoice = invoiceRes.rows[0];
@@ -192,17 +196,28 @@ export const recordSupplierPayment = async (req: express.Request, res: express.R
         const newAmountPaid = newPaidCents / 100;
 
         await db.query(
-            'INSERT INTO supplier_payments (id, supplier_invoice_id, date, amount, method, reference) VALUES ($1, $2, $3, $4, $5, $6)',
-            [generateId('spay'), invoiceId, paymentData.date, paymentData.amount, paymentData.method, paymentData.reference]
+            'INSERT INTO supplier_payments (id, supplier_invoice_id, date, amount, method, reference, store_id) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+            [generateId('spay'), invoiceId, paymentData.date, paymentData.amount, paymentData.method, paymentData.reference, storeId]
         );
 
         const updatedInvoice = await db.query(
-            'UPDATE supplier_invoices SET amount_paid = $1, status = $2 WHERE id = $3 RETURNING *',
-            [newAmountPaid, newStatus, invoiceId]
+            'UPDATE supplier_invoices SET amount_paid = $1, status = $2 WHERE id = $3 AND store_id = $4 RETURNING *',
+            [newAmountPaid, newStatus, invoiceId, storeId]
         );
 
         auditService.log(req.user!, 'Supplier Payment Recorded', `For Invoice ID: ${invoiceId}, Amount: ${paymentData.amount.toFixed(2)}`);
-        res.status(200).json(toCamelCase(updatedInvoice.rows[0]));
+
+        // Return enriched invoice with aggregated payments for immediate UI consistency
+        const enriched = await db.query(
+            `SELECT si.*, COALESCE(json_agg(sp.*) FILTER (WHERE sp.id IS NOT NULL), '[]') as payments
+             FROM supplier_invoices si
+             LEFT JOIN supplier_payments sp ON si.id = sp.supplier_invoice_id AND sp.store_id = $1
+             WHERE si.id = $2 AND si.store_id = $1
+             GROUP BY si.id`,
+            [storeId, invoiceId]
+        );
+
+        res.status(200).json(toCamelCase(enriched.rows[0]));
     } catch (error) {
         res.status(500).json({ message: 'Error recording supplier payment' });
     }

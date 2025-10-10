@@ -139,11 +139,12 @@ export const receiveItems = async (req: express.Request, res: express.Response) 
         if (!storeId) {
             return res.status(400).json({ message: 'Store context required' });
         }
-        // Ensure PO belongs to store
-        const poCheck = await db.query('SELECT id FROM purchase_orders WHERE id = $1 AND store_id = $2', [id, storeId]);
+        // Ensure PO belongs to store and fetch number
+        const poCheck = await db.query('SELECT id, po_number FROM purchase_orders WHERE id = $1 AND store_id = $2', [id, storeId]);
         if (poCheck.rowCount === 0) {
             return res.status(404).json({ message: 'Purchase Order not found' });
         }
+        const poNumber: string = poCheck.rows[0].po_number;
 
         for (const item of receivedItems) {
             // Update received quantity on PO
@@ -152,6 +153,18 @@ export const receiveItems = async (req: express.Request, res: express.Response) 
             await db.query('UPDATE products SET stock = stock + $1 WHERE id = $2 AND store_id = $3', [item.quantity, item.productId, storeId]);
         }
 
+        // Fetch cost prices for received items to post accounting entry
+        const productIds = receivedItems.map(i => i.productId);
+        const costsResult = await db.query(
+            'SELECT product_id, cost_price FROM purchase_order_items WHERE po_id = $1 AND product_id = ANY($2::text[]) AND store_id = $3',
+            [id, productIds, storeId]
+        );
+        const costByProduct: Record<string, number> = {};
+        for (const row of costsResult.rows) {
+            costByProduct[row.product_id] = Number(row.cost_price) || 0;
+        }
+        const itemsWithCost = receivedItems.map(ri => ({ productId: ri.productId, quantity: ri.quantity, costPrice: costByProduct[ri.productId] || 0 }));
+
         // Update PO status
         const itemsResult = await db.query('SELECT quantity, received_quantity FROM purchase_order_items WHERE po_id = $1 AND store_id = $2', [id, storeId]);
         const allReceived = itemsResult.rows.every(item => item.received_quantity >= item.quantity);
@@ -159,6 +172,9 @@ export const receiveItems = async (req: express.Request, res: express.Response) 
         const receivedAt = new Date().toISOString();
 
         const updatedPOResult = await db.query('UPDATE purchase_orders SET status = $1, received_at = $2 WHERE id = $3 AND store_id = $4 RETURNING *', [newStatus, receivedAt, id, storeId]);
+
+        // Record accounting entry: DR Inventory, CR Accounts Payable
+        await accountingService.recordPurchaseOrderReception(id, poNumber, itemsWithCost, undefined, storeId);
 
         auditService.log(req.user!, 'PO Stock Received', `PO ID: ${id} | ${receivedItems.length} item types.`);
         res.status(200).json(toCamelCase(updatedPOResult.rows[0]));

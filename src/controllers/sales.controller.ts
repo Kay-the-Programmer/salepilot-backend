@@ -18,9 +18,9 @@ export const getSales = async (req: express.Request, res: express.Response) => {
 
     let baseQuery = `
         FROM sales s
-                 LEFT JOIN sale_items si ON s.transaction_id = si.sale_id
-                 LEFT JOIN products p ON si.product_id = p.id
-                 LEFT JOIN payments pay ON s.transaction_id = pay.sale_id
+                 LEFT JOIN sale_items si ON s.transaction_id = si.sale_id AND si.store_id = s.store_id
+                 LEFT JOIN products p ON si.product_id = p.id AND p.store_id = s.store_id
+                 LEFT JOIN payments pay ON s.transaction_id = pay.sale_id AND pay.store_id = s.store_id
     `;
     const params: any[] = [];
     const whereClauses: string[] = [];
@@ -210,9 +210,11 @@ export const recordPayment = async (req: express.Request, res: express.Response)
             return res.status(400).json({ message: `Payment exceeds remaining balance. Remaining due is ${(remainingCents/100).toFixed(2)}.` });
         }
 
-        const newAmountPaid = sale.amount_paid + paymentData.amount;
-        const paidCents = Math.round(newAmountPaid * 100);
-        const newPaymentStatus = paidCents >= totalCents ? 'paid' : 'partially_paid';
+        // Compute in cents to avoid floating point errors
+        const newPaidCents = alreadyPaidCents + paymentCents;
+        const clampedPaidCents = Math.min(totalCents, newPaidCents);
+        const newAmountPaid = clampedPaidCents / 100;
+        const newPaymentStatus = clampedPaidCents >= totalCents ? 'paid' : 'partially_paid';
 
         await client.query(
             'INSERT INTO payments(id, sale_id, date, amount, method, store_id) VALUES ($1, $2, $3, $4, $5, $6)',
@@ -235,7 +237,20 @@ export const recordPayment = async (req: express.Request, res: express.Response)
         await accountingService.recordCustomerPayment(sale, { ...paymentData, id: '' }, client, storeId);
 
         await client.query('COMMIT');
-        res.status(200).json(toCamelCase(updatedSaleResult.rows[0]));
+
+        // Return enriched sale with aggregated payments for immediate UI consistency
+        const enrichedQuery = `
+            SELECT s.*,
+                   COALESCE(json_agg(DISTINCT pay.*) FILTER (WHERE pay.id IS NOT NULL), '[]') as payments
+            FROM sales s
+            LEFT JOIN payments pay ON s.transaction_id = pay.sale_id AND s.store_id = pay.store_id
+            WHERE s.transaction_id = $1 AND s.store_id = $2
+            GROUP BY s.transaction_id
+        `;
+        const enrichedResult = await client.query(enrichedQuery, [id, storeId]);
+        const enrichedSale = toCamelCase(enrichedResult.rows[0]);
+
+        res.status(200).json(enrichedSale);
 
     } catch (error) {
         await client.query('ROLLBACK');

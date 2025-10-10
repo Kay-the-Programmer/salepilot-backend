@@ -6,7 +6,6 @@ import { generateId, toCamelCase } from '../utils/helpers';
 import express from 'express';
 
 // Use a safe fallback to avoid runtime 500s if JWT_SECRET is missing in env.
-// In production, set JWT_SECRET in your hosting provider (Render) dashboard.
 const JWT_SECRET = process.env.JWT_SECRET || 'CHANGE_ME_DEV_ONLY';
 
 const generateToken = (id: string) => {
@@ -45,15 +44,24 @@ export const loginUser = async (req: express.Request, res: express.Response) => 
 
 export const registerUser = async (req: express.Request, res: express.Response) => {
     const { name, email, password } = req.body || {};
-    if (!name || !email || !password) {
-        return res.status(400).json({ message: 'Please add all fields' });
+    const trimmedName = String(name || '').trim();
+    const rawEmail = String(email || '').trim().toLowerCase();
+
+    if (!trimmedName || !rawEmail || !password) {
+        return res.status(400).json({ message: 'Please provide name, email, and password.' });
+    }
+    if (trimmedName.length < 2) {
+        return res.status(400).json({ message: 'Name must be at least 2 characters.' });
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail)) {
+        return res.status(400).json({ message: 'Please provide a valid email address.' });
     }
     if (String(password).length < 8) {
         return res.status(400).json({ message: 'Password must be at least 8 characters long.' });
     }
 
     try {
-        const normEmail = String(email).toLowerCase();
+        const normEmail = rawEmail;
         const userExistsResult = await db.query('SELECT id FROM users WHERE email = $1', [normEmail]);
         if ((userExistsResult.rowCount ?? 0) > 0) {
             return res.status(409).json({ message: 'User already exists' });
@@ -66,7 +74,7 @@ export const registerUser = async (req: express.Request, res: express.Response) 
 
         const insertResult = await db.query(
             'INSERT INTO users(id, name, email, password_hash, role) VALUES($1, $2, $3, $4, $5) RETURNING id, name, email, role',
-            [id, String(name), normEmail, password_hash, role]
+            [id, trimmedName, normEmail, password_hash, role]
         );
         const newUser = insertResult.rows[0];
 
@@ -127,5 +135,44 @@ export const changePassword = async (req: express.Request, res: express.Response
     } catch (error) {
         console.error('Change password error:', error);
         res.status(500).json({ message: 'Server error changing password' });
+    }
+};
+
+export const oauthLogin = async (req: express.Request, res: express.Response) => {
+    try {
+        const { provider, email, name } = req.body || {};
+        const normEmail = String(email || '').trim().toLowerCase();
+        const displayName = String(name || '').trim() || 'User';
+        if (!normEmail) {
+            return res.status(400).json({ message: 'Email is required' });
+        }
+
+        // Find existing user by email
+        const existing = await db.query('SELECT id, name, email, role, current_store_id FROM users WHERE email = $1', [normEmail]);
+        let user = existing.rows[0];
+
+        if (!user) {
+            // Create new user without password (OAuth)
+            const id = generateId('user');
+            const role = 'staff';
+            const inserted = await db.query(
+                'INSERT INTO users (id, name, email, role) VALUES ($1, $2, $3, $4) RETURNING id, name, email, role, current_store_id',
+                [id, displayName, normEmail, role]
+            );
+            user = inserted.rows[0];
+        }
+
+        const response = toCamelCase({
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            role: user.role,
+            current_store_id: user.current_store_id,
+            token: generateToken(user.id),
+        });
+        return res.json(response);
+    } catch (error) {
+        console.error('OAuth login error:', error);
+        return res.status(500).json({ message: 'Server error during OAuth login' });
     }
 };
